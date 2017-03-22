@@ -4,3 +4,4 @@ target
 *.class
 .idea/
 *.iml
+src/main/java/org/hyperledger/fabric/protos
