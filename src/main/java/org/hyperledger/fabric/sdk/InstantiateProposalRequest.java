@@ -4,7 +4,7 @@
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
  *  You may obtain a copy of the License at
- * 	  http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *  Unless required by applicable law or agreed to in writing, software
  *  distributed under the License is distributed on an "AS IS" BASIS,
  *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -14,8 +14,31 @@
 
 package org.hyperledger.fabric.sdk;
 
+import java.util.Map;
+
+import org.hyperledger.fabric.sdk.exception.InvalidArgumentException;
+
 /**
- * Deploy request.
+ * Instantiate request.
  */
 public class InstantiateProposalRequest extends TransactionRequest {
+
+    InstantiateProposalRequest(User userContext) {
+        super(userContext);
+    }
+
+    /**
+     * Transient data added to the proposal that is not added to the ledger.
+     *
+     * @param transientMap Map of strings to bytes that's added to the proposal
+     * @throws InvalidArgumentException if the argument is null.
+     */
+    public void setTransientMap(Map<String, byte[]> transientMap) throws InvalidArgumentException {
+        if (null == transientMap) {
+
+            throw new InvalidArgumentException("Transient map may not be set to null");
+
+        }
+        this.transientMap = transientMap;
+    }
 }

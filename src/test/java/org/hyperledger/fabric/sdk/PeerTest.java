@@ -4,7 +4,7 @@
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
  *  You may obtain a copy of the License at
- * 	  http://www.apache.org/licenses/LICENSE-2.0
+ *        http://www.apache.org/licenses/LICENSE-2.0
  *  Unless required by applicable law or agreed to in writing, software
  *  distributed under the License is distributed on an "AS IS" BASIS,
  *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -14,149 +14,90 @@
 
 package org.hyperledger.fabric.sdk;
 
-import java.io.File;
-
 import org.hyperledger.fabric.protos.peer.FabricProposal;
 import org.hyperledger.fabric.sdk.exception.InvalidArgumentException;
 import org.hyperledger.fabric.sdk.exception.PeerException;
-//import org.hyperledger.fabric.protos.peer.FabricProposal;
 import org.junit.Assert;
 import org.junit.BeforeClass;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.ExpectedException;
 
 public class PeerTest {
-	private static final String CHAIN_NAME = "chain1";
-	static HFClient hfclient = null;
-	static Peer peer = null;
+    static HFClient hfclient = null;
+    static Peer peer = null;
 
+    static final String PEER_NAME = "peertest";
 
-	@BeforeClass
-	public static void setupClient() {
+    @Rule
+    public ExpectedException thrown = ExpectedException.none();
+
+    @BeforeClass
+    public static void setupClient() {
         try {
-			hfclient = TestHFClient.newInstance();
-
-            peer= hfclient.newPeer("grpc://localhost:7051");
+            hfclient = TestHFClient.newInstance();
+            peer = hfclient.newPeer(PEER_NAME, "grpc://localhost:7051");
         } catch (Exception e) {
             e.printStackTrace();
             Assert.fail("Unexpected Exception " + e.getMessage());
-
         }
     }
 
-	@Test
-	public void testgetName() {
-		final  String PEER_NAME = "peertest";
+    @Test
+    public void testGetName() {
+        Assert.assertTrue(peer != null);
+        try {
+            peer = hfclient.newPeer(PEER_NAME, "grpc://localhost:4");
+            Assert.assertEquals(PEER_NAME, peer.getName());
+        } catch (InvalidArgumentException e) {
+            Assert.fail("Unexpected Exeception " + e.getMessage());
+        }
 
+    }
 
-		Assert.assertTrue(peer != null);
-		try {
-			peer.setName(PEER_NAME);
-			Assert.assertEquals(PEER_NAME,peer.getName());
-		} catch (InvalidArgumentException e) {
-			Assert.fail("Unexpected Exeception " + e.getMessage());
-		}
+    @Test (expected = InvalidArgumentException.class)
+    public void testSetNullName() throws InvalidArgumentException {
+        peer = hfclient.newPeer(null, "grpc://localhost:4");
+        Assert.fail("expected set null name to throw exception.");
+    }
 
-	}
-	@Test
-	public void testSetNullName() {
+    @Test (expected = InvalidArgumentException.class)
+    public void testSetEmptyName() throws InvalidArgumentException {
+        peer = hfclient.newPeer("", "grpc://localhost:4");
+        Assert.fail("expected set empty name to throw exception.");
+    }
 
-		try {
-			peer.setName(null);
-			Assert.fail("expected set null name to throw exception.");
-		} catch (Exception e) {
-			Assert.assertTrue( e.getClass() == InvalidArgumentException.class);
-		}
-	}
-	@Test
-	public void testSetEmptyName() {
+    @Test (expected = PeerException.class)
+    public void testSendNullProposal() throws PeerException, InvalidArgumentException {
+        peer.sendProposal(null);
+        Assert.fail("Expected null proposal to throw exception.");
+    }
 
-		try {
-			peer.setName("");
-			Assert.fail("expected set empty name to throw exception.");
-		} catch (Exception e) {
-			Assert.assertTrue( e.getClass() == InvalidArgumentException.class);
-		}
-	}
+    @Test (expected = PeerException.class)
+    public void testSendNullChannel() throws InvalidArgumentException, PeerException {
+        Peer badpeer = hfclient.newPeer("badpeer", "grpc://localhost:7051");
+        badpeer.sendProposal(FabricProposal.SignedProposal.newBuilder().build());
+        Assert.fail("Expected peer with no channel throw exception");
+    }
 
+    @Test (expected = PeerException.class)
+    public void testSendAsyncNullProposal() throws PeerException, InvalidArgumentException {
+        peer.sendProposalAsync(null);
+    }
 
-	@Test
-	public void testSetChain() {
+    @Test (expected = InvalidArgumentException.class)
+    public void testBadURL() throws InvalidArgumentException {
+        hfclient.newPeer(PEER_NAME, " ");
+        Assert.fail("Expected peer with no channel throw exception");
+    }
 
-		try {
-			Chain chain = hfclient.newChain("chain");
-			peer.setChain(chain);
-			Assert.assertTrue(chain == peer.getChain());
+    @Test
+    public void testDuplicateChannel() throws InvalidArgumentException {
+        thrown.expect(InvalidArgumentException.class);
+        thrown.expectMessage("Can not add peer " + PEER_NAME + " to channel duplicate because it already belongs to channel duplicate.");
 
-		} catch (Exception e) {
-			Assert.fail("Unexpected Exception " + e.getMessage());
-		}
-	}
-
-	@Test
-	public void testSetNullChain() {
-
-		try {
-
-			peer.setChain(null);
-			Assert.fail("Expected null chain to throw exception.");
-
-		} catch (Exception e) {
-			Assert.assertTrue( e.getClass() == InvalidArgumentException.class);
-		}
-	}
-
-	@Test
-	public void testSendNullProposal() {
-
-		try {
-
-			peer.sendProposal(null);
-			Assert.fail("Expected null proposal to throw exception.");
-
-		} catch (Exception e) {
-			Assert.assertTrue( e.getClass() == PeerException.class);
-		}
-	}
-	@Test
-	public void testSendNullChainl() {
-
-		try {
-
-			Peer badpeer = hfclient.newPeer("grpc://localhost:7051");
-			badpeer.setName("badpeer");
-
-			badpeer.sendProposal(FabricProposal.SignedProposal.newBuilder().build());
-			Assert.fail("Expected peer with no chain throw exception");
-
-		} catch (Exception e) {
-			Assert.assertTrue( e.getClass() == PeerException.class);
-		}
-	}
-
-	@Test(expected = PeerException.class)
-	public void testSendAsyncNullProposal() throws Exception {
-		peer.sendProposalAsync(null);
-	}
-
-	@Test(expected = PeerException.class)
-	public void testSendAsyncNullChain() throws Exception {
-		Peer peer = hfclient.newPeer("grpc://localhost:7051");
-		peer.sendProposalAsync(FabricProposal.SignedProposal.newBuilder().build());
-	}
-
-	@Test
-	public void testBadURL() {
-
-		try {
-
-			hfclient.newPeer(" ");
-
-			Assert.fail("Expected peer with no chain throw exception");
-
-		} catch (Exception e) {
-			Assert.assertTrue( e.getClass() == InvalidArgumentException.class);
-		}
-	}
-
-
+        Channel duplicate = hfclient.newChannel("duplicate");
+        peer.setChannel(duplicate);
+        peer.setChannel(duplicate);
+    }
 }

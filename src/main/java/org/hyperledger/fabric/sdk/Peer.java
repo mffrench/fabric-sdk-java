@@ -1,10 +1,10 @@
 /*
- *  Copyright 2016 DTCC, Fujitsu Australia Software Technology - All Rights Reserved.
+ *  Copyright 2016, 2017 DTCC, Fujitsu Australia Software Technology, IBM - All Rights Reserved.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
  *  You may obtain a copy of the License at
- * 	  http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *  Unless required by applicable law or agreed to in writing, software
  *  distributed under the License is distributed on an "AS IS" BASIS,
  *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -14,89 +14,136 @@
 
 package org.hyperledger.fabric.sdk;
 
+import java.io.Serializable;
+import java.util.EnumSet;
+import java.util.Objects;
+import java.util.Properties;
+import java.util.concurrent.ExecutorService;
+
 import com.google.common.util.concurrent.ListenableFuture;
+import io.netty.util.internal.StringUtil;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import org.hyperledger.fabric.sdk.exception.InvalidArgumentException;
-import org.hyperledger.fabric.sdk.exception.PeerException;
-import org.hyperledger.fabric.sdk.helper.SDKUtil;
 import org.hyperledger.fabric.protos.peer.FabricProposal;
 import org.hyperledger.fabric.protos.peer.FabricProposalResponse;
+import org.hyperledger.fabric.sdk.Channel.PeerOptions;
+import org.hyperledger.fabric.sdk.exception.InvalidArgumentException;
+import org.hyperledger.fabric.sdk.exception.PeerException;
+import org.hyperledger.fabric.sdk.exception.TransactionException;
+import org.hyperledger.fabric.sdk.transaction.TransactionContext;
+
+import static java.lang.String.format;
+import static org.hyperledger.fabric.sdk.helper.Utils.checkGrpcUrl;
 
 /**
- * The Peer class represents a peer to which SDK sends deploy, or query requests.
+ * The Peer class represents a peer to which SDK sends deploy, or query proposals requests.
  */
-public class Peer {
+public class Peer implements Serializable {
+
     private static final Log logger = LogFactory.getLog(Peer.class);
-    private final EndorserClient endorserClent;
-    private String name = null;
-    private String url;
+    private static final long serialVersionUID = -5273194649991828876L;
+    private final Properties properties;
+    private final String name;
+    private final String url;
+    private transient volatile EndorserClient endorserClent;
+    private transient PeerEventServiceClient peerEventingClient;
+    private transient boolean shutdown = false;
+    private Channel channel;
+    private String channelName;
+    private transient TransactionContext transactionContext;
 
-    public String getName() {
-        return name;
-    }
+    Peer(String name, String grpcURL, Properties properties) throws InvalidArgumentException {
 
-    /**
-     * Set peer's name
-     *
-     * @param name
-     */
-    public void setName(String name) throws InvalidArgumentException {
-        if (name == null) {
-            throw new InvalidArgumentException("Peer name set to null");
-        }
-        if (name.length() == 0) {
-            throw new InvalidArgumentException("Peer name can not be empty string.");
-        }
-        this.name = name;
-    }
-
-
-
-    /**
-     * Set the chain the peer is on.
-     *
-     * @param chain
-     */
-
-    void setChain(Chain chain) throws InvalidArgumentException {
-        if (chain == null) {
-            throw new InvalidArgumentException("Chain can not be null");
-        }
-
-        this.chain = chain;
-    }
-
-    private Chain chain;
-
-    /**
-     * Constructor for a peer given the endpoint config for the peer.
-     *
-     * @param url The URL of of the peer
-     * @param pem PEM certificate of the peer
-     */
-    public Peer(String url, String pem) throws InvalidArgumentException {
-
-
-        Exception e = SDKUtil.checkGrpcUrl(url);
-        if(e != null){
+        Exception e = checkGrpcUrl(grpcURL);
+        if (e != null) {
             throw new InvalidArgumentException("Bad peer url.", e);
 
         }
-        this.url = url;
 
+        if (StringUtil.isNullOrEmpty(name)) {
+            throw new InvalidArgumentException("Invalid name for peer");
+        }
 
+        this.url = grpcURL;
+        this.name = name;
+        this.properties = properties == null ? null : (Properties) properties.clone(); //keep our own copy.
 
-        this.endorserClent = new EndorserClient(new Endpoint(url, pem).getChannelBuilder());
+    }
+
+    static Peer createNewInstance(String name, String grpcURL, Properties properties) throws InvalidArgumentException {
+
+        return new Peer(name, grpcURL, properties);
     }
 
     /**
-     * Get the chain of which this peer is a member.
+     * Peer's name
      *
-     * @return {Chain} The chain of which this peer is a member.
+     * @return return the peer's name.
      */
-    public Chain getChain() {
-        return this.chain;
+
+    public String getName() {
+
+        return name;
+    }
+
+    public Properties getProperties() {
+
+        return properties == null ? null : (Properties) properties.clone();
+    }
+
+    void unsetChannel() {
+        channel = null;
+        channelName = null;
+    }
+
+    ExecutorService getExecutorService() {
+        return channel.getExecutorService();
+    }
+
+    void initiateEventing(TransactionContext transactionContext, PeerOptions peersOptions) throws TransactionException {
+
+        this.transactionContext = transactionContext.retryTransactionSameContext();
+
+        if (peerEventingClient == null) {
+
+            //PeerEventServiceClient(Peer peer, ManagedChannelBuilder<?> channelBuilder, Properties properties)
+            //   peerEventingClient = new PeerEventServiceClient(this, new HashSet<Channel>(Arrays.asList(new Channel[] {channel})));
+            peerEventingClient = new PeerEventServiceClient(this, new Endpoint(url, properties).getChannelBuilder(), properties, peersOptions);
+
+            peerEventingClient.connect(transactionContext);
+
+        }
+
+    }
+
+    /**
+     * The channel the peer is set on.
+     *
+     * @return
+     */
+
+    Channel getChannel() {
+
+        return channel;
+
+    }
+
+    /**
+     * Set the channel the peer is on.
+     *
+     * @param channel
+     */
+
+    void setChannel(Channel channel) throws InvalidArgumentException {
+
+        if (null != this.channel) {
+            throw new InvalidArgumentException(format("Can not add peer %s to channel %s because it already belongs to channel %s.",
+                    name, channel.getName(), this.channel.getName()));
+        }
+
+        this.channel = channel;
+        channelName = channel.getName();
+
     }
 
     /**
@@ -106,107 +153,218 @@ public class Peer {
      */
     public String getUrl() {
 
-        return this.url;
+        return url;
     }
 
     /**
      * for use in list of peers comparisons , e.g. list.contains() calls
+     *
      * @param otherPeer the peer instance to compare against
      * @return true if both peer instances have the same name and url
      */
-    public boolean equals(Peer otherPeer) {
-        return (name.equals(otherPeer.getName()) && url.equals(otherPeer.getUrl()));
+    @Override
+    public boolean equals(Object otherPeer) {
+        if (this == otherPeer) {
+            return true;
+        }
+        if (otherPeer == null) {
+            return false;
+        }
+        if (!(otherPeer instanceof Peer)) {
+            return false;
+        }
+        Peer p = (Peer) otherPeer;
+        return Objects.equals(this.name, p.name) && Objects.equals(this.url, p.url);
     }
 
-    public ListenableFuture<FabricProposalResponse.ProposalResponse> sendProposalAsync(FabricProposal.SignedProposal proposal)
+    @Override
+    public int hashCode() {
+        return Objects.hash(name, url);
+    }
+
+    ListenableFuture<FabricProposalResponse.ProposalResponse> sendProposalAsync(FabricProposal.SignedProposal proposal)
             throws PeerException, InvalidArgumentException {
         checkSendProposal(proposal);
 
-        logger.debug("peer.sendProposalAsync");
+        logger.debug(format("peer.sendProposalAsync name: %s, url: %s", name, url));
 
-        return endorserClent.sendProposalAsync(proposal);
+        EndorserClient localEndorserClient = endorserClent; //work off thread local copy.
+
+        if (null == localEndorserClient || !localEndorserClient.isChannelActive()) {
+            endorserClent = new EndorserClient(new Endpoint(url, properties).getChannelBuilder());
+            localEndorserClient = endorserClent;
+        }
+
+        try {
+            return localEndorserClient.sendProposalAsync(proposal);
+        } catch (Throwable t) {
+            endorserClent = null;
+            throw t;
+        }
     }
 
-    public FabricProposalResponse.ProposalResponse sendProposal(FabricProposal.SignedProposal proposal)
+    FabricProposalResponse.ProposalResponse sendProposal(FabricProposal.SignedProposal proposal)
             throws PeerException, InvalidArgumentException {
         checkSendProposal(proposal);
 
-        logger.debug("peer.sendProposal");
+        logger.debug(format("peer.sendProposalAsync name: %s, url: %s", name, url));
 
-        return endorserClent.sendProposal(proposal);
+        EndorserClient localEndorserClient = endorserClent; //work off thread local copy.
+
+        if (null == localEndorserClient || !localEndorserClient.isChannelActive()) {
+            endorserClent = new EndorserClient(new Endpoint(url, properties).getChannelBuilder());
+            localEndorserClient = endorserClent;
+        }
+
+        try {
+            return localEndorserClient.sendProposal(proposal);
+        } catch (Throwable t) {
+            endorserClent = null;
+            throw t;
+        }
     }
 
     private void checkSendProposal(FabricProposal.SignedProposal proposal) throws PeerException, InvalidArgumentException {
+
+        if (shutdown) {
+            throw new PeerException(format("Peer %s was shutdown.", name));
+        }
         if (proposal == null) {
             throw new PeerException("Proposal is null");
         }
-        if (chain == null) {
-            throw new PeerException("Chain is null");
-        }
-        Exception e = SDKUtil.checkGrpcUrl(url);
+        Exception e = checkGrpcUrl(url);
         if (e != null) {
             throw new InvalidArgumentException("Bad peer url.", e);
 
         }
     }
 
+    synchronized void shutdown(boolean force) {
+        if (shutdown) {
+            return;
+        }
+        shutdown = true;
+        channel = null;
 
-    /**
-     * TODO: Temporary hack to wait until the deploy event has hopefully completed.
-     * This does not detect if an error occurs in the peer or chaincode when deploying.
-     * When peer event listening is added to the SDK, this will be implemented correctly.
-     */
+        EndorserClient lendorserClent = endorserClent;
 
-    /*TODO check waitForDeployComplete
-    private void waitForDeployComplete(events.EventEmitter eventEmitter, EventDeploySubmitted submitted) {
-        let waitTime = this.chain.getDeployWaitTime();
-        logger.debug("waiting %d seconds before emitting deploy complete event",waitTime);
-        setTimeout(
-           function() {
-              let event = new EventDeployComplete(
-                  submitted.uuid,
-                  submitted.chaincodeID,
-                  "TODO: get actual results; waited "+waitTime+" seconds and assumed deploy was successful"
-              );
-              eventEmitter.emit("complete",event);
-           },
-           waitTime * 1000
-        );
-    }
-    */
+        //allow resources to finalize
 
-    /**
-     * TODO: Temporary hack to wait until the deploy event has hopefully completed.
-     * This does not detect if an error occurs in the peer or chaincode when deploying.
-     * When peer event listening is added to the SDK, this will be implemented correctly.
-     */
+        endorserClent = null;
 
-    /*TODO check waitForInvokeComplete
-    private void waitForInvokeComplete(events.EventEmitter eventEmitter) {
-        let waitTime = this.chain.getInvokeWaitTime();
-        logger.debug("waiting %d seconds before emitting invoke complete event",waitTime);
-        setTimeout(
-           function() {
-              eventEmitter.emit("complete",new EventInvokeComplete("waited "+waitTime+" seconds and assumed invoke was successful"));
-           },
-           waitTime * 1000
-        );
-    }
-    */
+        if (lendorserClent != null) {
 
-    /**
-     * Remove the peer from the chain.
-     */
-    public void remove() {
-        throw new RuntimeException("TODO: implement"); //TODO implement remove
+            lendorserClent.shutdown(force);
+        }
+
+        PeerEventServiceClient lpeerEventingClient = peerEventingClient;
+        peerEventingClient = null;
+
+        if (null != lpeerEventingClient) {
+            // PeerEventServiceClient peerEventingClient1 = peerEventingClient;
+
+            lpeerEventingClient.shutdown(force);
+        }
     }
 
-    /**
-     * create a new peer with given peer endpoint config.
-     */
-    static Peer createNewInstance(String grpcUrl, String pem) throws InvalidArgumentException {
-        return new Peer(grpcUrl, pem);
+    @Override
+    protected void finalize() throws Throwable {
+        shutdown(true);
+        super.finalize();
     }
 
+    void reconnectPeerEventServiceClient(final PeerEventServiceClient failedPeerEventServiceClient, final Throwable t) {
+        if (shutdown) {
+            logger.debug("Not reconnecting PeerEventServiceClient shutdown ");
+            return;
 
+        }
+        TransactionContext ltransactionContext = transactionContext;
+        if (ltransactionContext == null) {
+
+            logger.debug("Not reconnecting PeerEventServiceClient no transaction available ");
+        }
+        final TransactionContext fltransactionContext = ltransactionContext.retryTransactionSameContext();
+
+        final ExecutorService executorService = getExecutorService();
+        if (executorService != null && !executorService.isShutdown() && !executorService.isTerminated()) {
+
+            executorService.execute(() -> {
+                try {
+                    Thread.sleep(6000); //wait for retry.
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+                if (shutdown) {
+                    logger.debug("Not reconnecting PeerEventServiceClient shutdown ");
+                    return;
+
+                }
+
+                logger.debug(t);
+
+                PeerEventServiceClient lpeerEventingClient = new PeerEventServiceClient(this, new Endpoint(url, properties).getChannelBuilder(), properties, null);
+
+                try {
+                    lpeerEventingClient.connect(fltransactionContext);
+                    if (lpeerEventingClient.isChannelActive()) {
+                        logger.info(format("Channel %s PeerEventing Service %s reconnected to url %s ", channelName, name, url));
+                        peerEventingClient = lpeerEventingClient;
+
+                    }
+
+                } catch (TransactionException e) {
+                    logger.debug(e);
+                }
+            });
+
+        }
+
+    }
+
+    /**
+     * Possible roles a peer can perform.
+     */
+    public enum PeerRole {
+        /**
+         * Endorsing peer installs and runs chaincode.
+         */
+        ENDORSING_PEER("endorsingPeer"),
+        /**
+         * Chaincode query peer will be used to invoke chaincode on chaincode query requests.
+         */
+        CHAINCODE_QUERY("chaincodeQuery"),
+        /**
+         * Ledger Query will be used when query ledger operations are requested.
+         */
+        LEDGER_QUERY("ledgerQuery"),
+        /**
+         * Peer will monitor block events for the channel it belongs to.
+         */
+        EVENT_SOURCE("eventSource");
+
+        /**
+         * All roles.
+         */
+        public static final EnumSet<PeerRole> ALL = EnumSet.allOf(PeerRole.class);
+        /**
+         * All roles except event source.
+         */
+        public static final EnumSet<PeerRole> NO_EVENT_SOURCE = EnumSet.complementOf(EnumSet.of(PeerRole.EVENT_SOURCE));
+        private final String propertyName;
+
+        PeerRole(String propertyName) {
+            this.propertyName = propertyName;
+        }
+
+        public String getPropertyName() {
+            return propertyName;
+        }
+    }
+
+    @Override
+    public String toString() {
+        return "Peer " + name + " url: " + url;
+
+    }
 } // end Peer

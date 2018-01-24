@@ -4,7 +4,7 @@
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
  *  You may obtain a copy of the License at
- * 	  http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *  Unless required by applicable law or agreed to in writing, software
  *  distributed under the License is distributed on an "AS IS" BASIS,
  *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -17,14 +17,13 @@ package org.hyperledger.fabric_ca.sdk;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.util.ArrayList;
+import java.util.Collection;
 
 import javax.json.Json;
+import javax.json.JsonArrayBuilder;
 import javax.json.JsonObject;
 import javax.json.JsonObjectBuilder;
-import javax.json.JsonArrayBuilder;
 import javax.json.JsonWriter;
-
-import org.hyperledger.fabric.sdk.Attribute;
 
 /**
  * A registration request is information required to register a user, peer, or other
@@ -35,96 +34,139 @@ public class RegistrationRequest {
     // The enrollment ID of the user
     private String enrollmentID;
     // Type of identity
-    private String type;
+    private String type = "user";
     // Optional secret
     private String secret;
     // Maximum number of enrollments with the secret
-    private int maxEnrollments;
+    private Integer maxEnrollments = null;
     // Affiliation for a user
     private String affiliation;
     // Array of attribute names and values
-    private ArrayList<Attribute> attrs = new ArrayList<Attribute>();
-    
+    private Collection<Attribute> attrs = new ArrayList<Attribute>();
+
+    private String caName;
+
     // Constructor
-    public RegistrationRequest(String id, String affiliation) throws Exception {
-    	if (id == null) {
-    		throw new Exception("id may not be null");
-    	}
-    	if (affiliation == null) {
-    		throw new Exception("affiliation may not be null");
-    	}
-    	this.enrollmentID = id;
-    	this.affiliation = affiliation;
-    	this.type = "user";
+
+    /**
+     * Register user with certificate authority
+     *
+     * @param id The id of the user to register.
+     * @throws Exception
+     */
+    public RegistrationRequest(String id) throws Exception {
+        if (id == null) {
+            throw new Exception("id may not be null");
+        }
+        this.enrollmentID = id;
+
     }
-    
-	public String getEnrollmentID() {
-		return enrollmentID;
-	}
 
-	
-	public void setEnrollmentID(String enrollmentID) {
-		this.enrollmentID = enrollmentID;
-	}
-	
-	public String getSecret() {
-		return secret;
-	}
+    /**
+     * Register user with certificate authority
+     *
+     * @param id          The id of the user to register.
+     * @param affiliation The user's affiliation.
+     * @throws Exception
+     */
+    public RegistrationRequest(String id, String affiliation) throws Exception {
+        if (id == null) {
+            throw new Exception("id may not be null");
+        }
+        if (affiliation == null) {
+            throw new Exception("affiliation may not be null");
+        }
 
-	public void setSecret(String secret) {
-		this.secret = secret;
-	}
+        this.enrollmentID = id;
+        this.affiliation = affiliation;
 
-	public int getMaxEnrollments() {
-		return maxEnrollments;
-	}
+    }
 
-	public void setMaxEnrollments(int maxEnrollments) {
-		this.maxEnrollments = maxEnrollments;
-	}
+    public String getEnrollmentID() {
+        return enrollmentID;
+    }
 
-	public String getType() {
-		return type;
-	}
-	
-	public void setType(String type) {
-		this.type = type;
-	}
-	
-	public String getAffiliation() {
-		return affiliation;
-	}
+    public void setEnrollmentID(String enrollmentID) {
+        this.enrollmentID = enrollmentID;
+    }
 
-	public void setAffiliation(String affiliation) {
-		this.affiliation = affiliation;
-	}
-	
-	// Convert the registration request to a JSON string
-	public String toJson() {
-	    StringWriter stringWriter = new StringWriter();
-	    JsonWriter jsonWriter = Json.createWriter(new PrintWriter(stringWriter));
-	    jsonWriter.writeObject(this.toJsonObject());
-	    jsonWriter.close();
-	    return stringWriter.toString();
-	}
+    public String getSecret() {
+        return secret;
+    }
 
-	// Convert the registration request to a JSON object
-	public JsonObject toJsonObject() {
+    public void setSecret(String secret) {
+        this.secret = secret;
+    }
+
+    public Integer getMaxEnrollments() {
+        return maxEnrollments;
+    }
+
+    public void setMaxEnrollments(int maxEnrollments) {
+        this.maxEnrollments = maxEnrollments;
+    }
+
+    public String getType() {
+        return type;
+    }
+
+    public void setType(String type) {
+        this.type = type;
+    }
+
+    public String getAffiliation() {
+        return affiliation;
+    }
+
+    public void setAffiliation(String affiliation) {
+        this.affiliation = affiliation;
+    }
+
+    public Collection<Attribute> getAttributes() {
+        return attrs;
+    }
+
+    public void addAttribute(Attribute attr) {
+        this.attrs.add(attr);
+    }
+
+    void setCAName(String caName) {
+        this.caName = caName;
+    }
+
+    // Convert the registration request to a JSON string
+    String toJson() {
+        StringWriter stringWriter = new StringWriter();
+        JsonWriter jsonWriter = Json.createWriter(new PrintWriter(stringWriter));
+        jsonWriter.writeObject(toJsonObject());
+        jsonWriter.close();
+        return stringWriter.toString();
+    }
+
+    // Convert the registration request to a JSON object
+    JsonObject toJsonObject() {
         JsonObjectBuilder ob = Json.createObjectBuilder();
-        ob.add("id", this.enrollmentID);
-        ob.add("type",  this.type);
+        ob.add("id", enrollmentID);
+        ob.add("type", type);
         if (this.secret != null) {
-            ob.add("secret",  this.secret);
+            ob.add("secret", secret);
         }
-        ob.add("max_enrollments",  this.maxEnrollments);
-        ob.add("affiliation",  this.affiliation);
-        ob.add("group",  this.affiliation);  // TODO: REMOVE THIS WHEN API IS CHANGED  (See https://jira.hyperledger.org/browse/FAB-2534)
-        JsonArrayBuilder ab = Json.createArrayBuilder();
-        for (Attribute attr: this.attrs) {
-        	ab.add(attr.toJsonObject());
-        }
-        return ob.build();
-	}
+        if (null != maxEnrollments) {
 
-  
+            ob.add("max_enrollments", maxEnrollments);
+        }
+        if (affiliation != null) {
+            ob.add("affiliation", affiliation);
+        }
+
+        JsonArrayBuilder ab = Json.createArrayBuilder();
+        for (Attribute attr : attrs) {
+            ab.add(attr.toJsonObject());
+        }
+        if (caName != null) {
+            ob.add(HFCAClient.FABRIC_CA_REQPROP, caName);
+        }
+        ob.add("attrs", ab.build());
+        return ob.build();
+    }
 }

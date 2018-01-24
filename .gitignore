@@ -5,3 +5,4 @@ target
 .idea/
 *.iml
 src/main/java/org/hyperledger/fabric/protos
+*.resources.prefs

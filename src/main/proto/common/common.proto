@@ -32,23 +32,26 @@ enum Status {
     NOT_FOUND = 404;
     REQUEST_ENTITY_TOO_LARGE = 413;
     INTERNAL_SERVER_ERROR = 500;
+    NOT_IMPLEMENTED = 501;
     SERVICE_UNAVAILABLE = 503;
 }
 
 enum HeaderType {
-    MESSAGE = 0;                   // Used for messages which are signed but opaque
-    CONFIG = 1;                    // Used for messages which express the channel config
-    CONFIG_UPDATE = 2;             // Used for transactions which update the channel config
-    ENDORSER_TRANSACTION = 3;      // Used by the SDK to submit endorser based transactions
-    ORDERER_TRANSACTION = 4;       // Used internally by the orderer for management
-    DELIVER_SEEK_INFO = 5;         // Used as the type for Envelope messages submitted to instruct the Deliver API to seek
+    MESSAGE = 0; // Used for messages which are signed but opaque
+    CONFIG = 1; // Used for messages which express the channel config
+    CONFIG_UPDATE = 2; // Used for transactions which update the channel config
+    ENDORSER_TRANSACTION = 3; // Used by the SDK to submit endorser based transactions
+    ORDERER_TRANSACTION = 4; // Used internally by the orderer for management
+    DELIVER_SEEK_INFO = 5; // Used as the type for Envelope messages submitted to instruct the Deliver API to seek
+    CHAINCODE_PACKAGE = 6; // Used for packaging chaincode artifacts for install
+    PEER_RESOURCE_UPDATE = 7; // Used for encoding updates to the peer resource configuration
 }
 
 // This enum enlists indexes of the block metadata array
 enum BlockMetadataIndex {
     SIGNATURES = 0;             // Block metadata array position for block signatures
-    LAST_CONFIG = 1;            // Block metadata array poistion to store last configuration block sequence number
-    TRANSACTIONS_FILTER = 2;    // Block metadata array poistion to store serialized bit array filter of invalid transactions
+    LAST_CONFIG = 1;            // Block metadata array position to store last configuration block sequence number
+    TRANSACTIONS_FILTER = 2;    // Block metadata array position to store serialized bit array filter of invalid transactions
     ORDERER = 3;                // Block metadata array position to store operational metadata for orderers
                                 // e.g. For Kafka, this is where we store the last offset written to the local ledger.
 }
@@ -107,10 +110,14 @@ message ChannelHeader {
 
     // Extension that may be attached based on the header type
     bytes extension = 7;
+
+    // If mutual TLS is employed, this represents
+    // the hash of the client's TLS certificate
+    bytes tls_cert_hash = 8;
 }
 
 message SignatureHeader {
-    // Creator of the message, specified as a certificate chain
+    // Creator of the message, a marshaled msp.SerializedIdentity
     bytes creator = 1;
 
     // Arbitrary number that may only be used once. Can be used to detect replay attacks.

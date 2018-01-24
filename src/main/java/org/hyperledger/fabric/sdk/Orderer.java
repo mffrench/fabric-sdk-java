@@ -4,7 +4,7 @@
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
  *  You may obtain a copy of the License at
- * 	  http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *  Unless required by applicable law or agreed to in writing, software
  *  distributed under the License is distributed on an "AS IS" BASIS,
  *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -14,7 +14,10 @@
 
 package org.hyperledger.fabric.sdk;
 
+import java.io.Serializable;
+import java.util.Properties;
 
+import io.netty.util.internal.StringUtil;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.hyperledger.fabric.protos.common.Common;
@@ -22,13 +25,63 @@ import org.hyperledger.fabric.protos.orderer.Ab;
 import org.hyperledger.fabric.protos.orderer.Ab.DeliverResponse;
 import org.hyperledger.fabric.sdk.exception.InvalidArgumentException;
 import org.hyperledger.fabric.sdk.exception.TransactionException;
-import org.hyperledger.fabric.sdk.helper.SDKUtil;
+
+import static java.lang.String.format;
+import static org.hyperledger.fabric.sdk.helper.Utils.checkGrpcUrl;
 
 /**
  * The Orderer class represents a orderer to which SDK sends deploy, invoke, or query requests.
  */
-public class Orderer {
+public class Orderer implements Serializable {
     private static final Log logger = LogFactory.getLog(Orderer.class);
+    private static final long serialVersionUID = 4281642068914263247L;
+    private final Properties properties;
+    private final String name;
+    private final String url;
+    private transient boolean shutdown = false;
+    private Channel channel;
+    private transient volatile OrdererClient ordererClient = null;
+
+    Orderer(String name, String url, Properties properties) throws InvalidArgumentException {
+
+        if (StringUtil.isNullOrEmpty(name)) {
+            throw new InvalidArgumentException("Invalid name for orderer");
+        }
+        Exception e = checkGrpcUrl(url);
+        if (e != null) {
+            throw new InvalidArgumentException(e);
+        }
+
+        this.name = name;
+        this.url = url;
+        this.properties = properties == null ? null : (Properties) properties.clone(); //keep our own copy.
+
+    }
+
+    static Orderer createNewInstance(String name, String url, Properties properties) throws InvalidArgumentException {
+        return new Orderer(name, url, properties);
+
+    }
+
+    /**
+     * Get Orderer properties.
+     *
+     * @return properties
+     */
+
+    public Properties getProperties() {
+
+        return properties == null ? null : (Properties) properties.clone();
+    }
+
+    /**
+     * Return Orderer's name
+     *
+     * @return orderer's name.
+     */
+    public String getName() {
+        return name;
+    }
 
     /**
      * getUrl - the Grpc url of the Orderer
@@ -39,56 +92,34 @@ public class Orderer {
         return url;
     }
 
-    private final String url;
-    private final String pem;
-//    private final EndorserClient endorserClent;
+    void unsetChannel() {
 
-    public void setChain(Chain chain) throws InvalidArgumentException {
-        if (chain == null) {
-            throw new InvalidArgumentException("Chain can not be null");
-        }
-
-        this.chain = chain;
-    }
-
-    private Chain chain;
-//    private OrdererClient ordererClient;
-
-    /**
-     * Constructor for a orderer given the endpoint config for the orderer.
-     *
-     * @param url   The URL of
-     * @param pem   PEM for the orderer
-     * @param chain chain
-     */
-    Orderer(String url, String pem, Chain chain) throws InvalidArgumentException {
-
-
-        Exception e = SDKUtil.checkGrpcUrl(url);
-        if (e != null) {
-            throw new InvalidArgumentException("Bad Orderer url.", e);
-
-        }
-        //  super(url, pem);
-        this.url = url;
-        this.pem = pem;
-
-
-        this.chain = chain;
-        // Endpoint ep = new Endpoint(url, pem);
-        // Ab.BroadcastMessageOrBuilder bb = Ab.BroadcastMessage.newBuilder();
+        channel = null;
 
     }
 
     /**
-     * Get the chain of which this orderer is a member.
+     * Get the channel of which this orderer is a member.
      *
-     * @return {Chain} The chain of which this orderer is a member.
+     * @return {Channel} The channel of which this orderer is a member.
      */
-    public Chain getChain() {
-        return this.chain;
+    Channel getChannel() {
+        return channel;
     }
 
+    void setChannel(Channel channel) throws InvalidArgumentException {
+        if (channel == null) {
+            throw new InvalidArgumentException("setChannel Channel can not be null");
+        }
+
+        if (null != this.channel && this.channel != channel) {
+            throw new InvalidArgumentException(format("Can not add orderer %s to channel %s because it already belongs to channel %s.",
+                    name, channel.getName(), this.channel.getName()));
+        }
+
+        this.channel = channel;
+
+    }
 
     /**
      * Send transaction to Order
@@ -96,25 +127,74 @@ public class Orderer {
      * @param transaction transaction to be sent
      */
 
-    public Ab.BroadcastResponse sendTransaction(Common.Envelope transaction) throws Exception {
+    Ab.BroadcastResponse sendTransaction(Common.Envelope transaction) throws Exception {
+        if (shutdown) {
+            throw new TransactionException(format("Orderer %s was shutdown.", name));
+        }
 
-        OrdererClient orderClient = new OrdererClient(new Endpoint(url, pem).getChannelBuilder());
-        return orderClient.sendTransaction(transaction);
+        logger.debug(format("Order.sendTransaction name: %s, url: %s", name, url));
+
+        OrdererClient localOrdererClient = ordererClient;
+
+        if (localOrdererClient == null || !localOrdererClient.isChannelActive()) {
+            ordererClient = new OrdererClient(this, new Endpoint(url, properties).getChannelBuilder(), properties);
+            localOrdererClient = ordererClient;
+        }
+
+        try {
+
+            return localOrdererClient.sendTransaction(transaction);
+        } catch (Throwable t) {
+            ordererClient = null;
+            throw t;
+
+        }
 
     }
 
+    DeliverResponse[] sendDeliver(Common.Envelope transaction) throws TransactionException {
 
-    public static Orderer createNewInstance(String url, String pem) throws InvalidArgumentException {
-        return new Orderer(url, pem, null);
+        if (shutdown) {
+            throw new TransactionException(format("Orderer %s was shutdown.", name));
+        }
+
+        OrdererClient localOrdererClient = ordererClient;
+
+        logger.debug(format("Order.sendDeliver name: %s, url: %s", name, url));
+        if (localOrdererClient == null || !localOrdererClient.isChannelActive()) {
+            localOrdererClient = new OrdererClient(this, new Endpoint(url, properties).getChannelBuilder(), properties);
+            ordererClient = localOrdererClient;
+        }
+
+        try {
+
+            return localOrdererClient.sendDeliver(transaction);
+        } catch (Throwable t) {
+            ordererClient = null;
+            throw t;
+
+        }
 
     }
 
-     DeliverResponse[] sendDeliver(Common.Envelope transaction) throws TransactionException {
+    synchronized void shutdown(boolean force) {
+        if (shutdown) {
+            return;
+        }
+        shutdown = true;
+        channel = null;
 
-        OrdererClient orderClient = new OrdererClient(new Endpoint(url, pem).getChannelBuilder());
-        return orderClient.sendDeliver(transaction);
+        if (ordererClient != null) {
+            OrdererClient torderClientDeliver = ordererClient;
+            ordererClient = null;
+            torderClientDeliver.shutdown(force);
+        }
 
     }
 
-
+    @Override
+    protected void finalize() throws Throwable {
+        shutdown(true);
+        super.finalize();
+    }
 } // end Orderer

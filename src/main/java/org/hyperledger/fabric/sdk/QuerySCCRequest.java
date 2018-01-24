@@ -15,7 +15,6 @@
 package org.hyperledger.fabric.sdk;
 
 import org.hyperledger.fabric.protos.peer.Chaincode;
-import org.hyperledger.fabric.sdk.transaction.ProposalBuilder;
 
 /**
  * Request for getting information about the blockchain ledger.
@@ -28,26 +27,14 @@ public class QuerySCCRequest extends TransactionRequest {
     public static final String GETTRANSACTIONBYID = "GetTransactionByID";
     public static final String GETBLOCKBYTXID = "GetBlockByTxID";
 
+    public QuerySCCRequest(User userContext) {
+        super(userContext);
+    }
+
     @Override
-    public ChainCodeID getChaincodeID() {
-        return new ChainCodeID(
+    public ChaincodeID getChaincodeID() {
+        return new ChaincodeID(
                 Chaincode.ChaincodeID.newBuilder().setName("qscc").build());
     }
 
-    /* (non-Javadoc)
-     * Responses from QSCC are not signed
-     * @see org.hyperledger.fabric.sdk.TransactionRequest#doVerify()
-     */
-    @Override
-    public boolean doVerify() {
-        return false;
-    }
-
-    /* (non-Javadoc)
-     * @see org.hyperledger.fabric.sdk.TransactionRequest#clearChainID(org.hyperledger.fabric.sdk.transaction.ProposalBuilder)
-     */
-    @Override
-    public boolean noChainID() {
-        return true;
-    }
 }

@@ -4,7 +4,7 @@
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
  *  You may obtain a copy of the License at
- * 	  http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *  Unless required by applicable law or agreed to in writing, software
  *  distributed under the License is distributed on an "AS IS" BASIS,
  *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -17,26 +17,22 @@ package org.hyperledger.fabric.sdk;
 import java.security.PrivateKey;
 
 /**
- * Enrollment - Interface which is the contract between the Certificate Authority provider and the SDK.
+ * Interface which is the contract between the Certificate Authority provider and the SDK.
  */
 public interface Enrollment {
 
     /**
-     * Key is the user's private key
+     * Get the user's private key
+     *
      * @return private key.
      */
-    public PrivateKey getKey();
+    PrivateKey getKey();
 
     /**
-     * Certificate is the users signed certificate.
-     * @return
+     * Get the user's signed certificate.
+     *
+     * @return a certificate.
      */
-    public String getCert();
-
-    /**
-     * The users public key.
-     * @return
-     */
-    public String getPublicKey();
+    String getCert();
 
 }

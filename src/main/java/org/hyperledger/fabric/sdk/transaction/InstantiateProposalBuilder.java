@@ -4,7 +4,7 @@
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
  *  You may obtain a copy of the License at
- * 	  http://www.apache.org/licenses/LICENSE-2.0
+ *        http://www.apache.org/licenses/LICENSE-2.0
  *  Unless required by applicable law or agreed to in writing, software
  *  distributed under the License is distributed on an "AS IS" BASIS,
  *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -18,50 +18,49 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 
 import com.google.protobuf.ByteString;
-import io.netty.util.internal.StringUtil;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.hyperledger.fabric.protos.peer.Chaincode.ChaincodeDeploymentSpec;
-import org.hyperledger.fabric.protos.peer.Chaincode.ChaincodeID;
-import org.hyperledger.fabric.protos.peer.Chaincode.ChaincodeInput;
-import org.hyperledger.fabric.protos.peer.Chaincode.ChaincodeSpec;
-import org.hyperledger.fabric.protos.peer.Chaincode.ChaincodeSpec.Type;
 import org.hyperledger.fabric.protos.peer.FabricProposal;
 import org.hyperledger.fabric.sdk.ChaincodeEndorsementPolicy;
-import org.hyperledger.fabric.sdk.TransactionRequest;
-import org.hyperledger.fabric.sdk.exception.CryptoException;
+import org.hyperledger.fabric.sdk.exception.InvalidArgumentException;
 import org.hyperledger.fabric.sdk.exception.ProposalException;
 
 import static org.hyperledger.fabric.sdk.transaction.ProtoUtils.createDeploymentSpec;
 
+public class InstantiateProposalBuilder extends LSCCProposalBuilder {
 
-public class InstantiateProposalBuilder extends ProposalBuilder {
+    private static final Log logger = LogFactory.getLog(InstantiateProposalBuilder.class);
 
-    private final static Log logger = LogFactory.getLog(InstantiateProposalBuilder.class);
-    private final static String LCCC_CHAIN_NAME = "lccc";
     private String chaincodePath;
 
-
-    private String chaincodeSource;
     private String chaincodeName;
     private List<String> argList;
-    private TransactionRequest.Type chaincodeLanguage;
     private String chaincodeVersion;
 
-    private byte[] chaincodePolicy = null ;
+    private byte[] chaincodePolicy = null;
+    protected String action = "deploy";
 
-    private InstantiateProposalBuilder() {
+    public void setTransientMap(Map<String, byte[]> transientMap) throws InvalidArgumentException {
+        if (null == transientMap) {
+
+            throw new InvalidArgumentException("Transient map may not be null");
+
+        }
+        this.transientMap = transientMap;
+    }
+
+    protected InstantiateProposalBuilder() {
         super();
     }
 
     public static InstantiateProposalBuilder newBuilder() {
         return new InstantiateProposalBuilder();
 
-
     }
-
 
     public InstantiateProposalBuilder chaincodePath(String chaincodePath) {
 
@@ -90,25 +89,18 @@ public class InstantiateProposalBuilder extends ProposalBuilder {
         return this;
     }
 
-
     @Override
-    public FabricProposal.Proposal build() throws ProposalException, CryptoException {
+    public FabricProposal.Proposal build() throws ProposalException {
 
         constructInstantiateProposal();
         return super.build();
     }
 
-
     private void constructInstantiateProposal() throws ProposalException {
-
 
         try {
 
-            if (context.isDevMode()) {
-                createDevModeTransaction();
-            } else {
-                createNetModeTransaction();
-            }
+            createNetModeTransaction();
 
         } catch (Exception exp) {
             logger.error(exp);
@@ -116,17 +108,8 @@ public class InstantiateProposalBuilder extends ProposalBuilder {
         }
     }
 
-    private void createNetModeTransaction() throws Exception {
+    private void createNetModeTransaction() {
         logger.debug("NetModeTransaction");
-
-        // Verify that chaincodePath is being passed
-        if (StringUtil.isNullOrEmpty(chaincodePath)) {
-            throw new IllegalArgumentException("[NetMode] Missing chaincodePath in Instantiate Request");
-        }
-
-
-        Type ccType = chaincodeLanguage == TransactionRequest.Type.GO_LANG ? Type.GOLANG : Type.JAVA;
-
 
         List<String> modlist = new LinkedList<>();
         modlist.add("init");
@@ -135,49 +118,16 @@ public class InstantiateProposalBuilder extends ProposalBuilder {
         ChaincodeDeploymentSpec depspec = createDeploymentSpec(ccType,
                 chaincodeName, chaincodePath, chaincodeVersion, modlist, null);
 
-
         List<ByteString> argList = new ArrayList<>();
-        argList.add(ByteString.copyFrom("deploy", StandardCharsets.UTF_8));
-        argList.add(ByteString.copyFrom("default", StandardCharsets.UTF_8));
+        argList.add(ByteString.copyFrom(action, StandardCharsets.UTF_8));
+        argList.add(ByteString.copyFrom(context.getChannelID(), StandardCharsets.UTF_8));
         argList.add(depspec.toByteString());
-        if (chaincodePolicy != null ) {
+        if (chaincodePolicy != null) {
             argList.add(ByteString.copyFrom(chaincodePolicy));
         }
 
-        ChaincodeID lcccID = ChaincodeID.newBuilder().setName(LCCC_CHAIN_NAME).build();
-
         args(argList);
-        chaincodeID(lcccID);
-        ccType(ccType);
 
-    }
-
-
-    private void createDevModeTransaction() {
-        logger.debug("newDevModeTransaction");
-
-
-        ChaincodeDeploymentSpec depspec = createDeploymentSpec(Type.GOLANG,
-                chaincodeName, chaincodePath, chaincodeVersion, argList, null);
-
-        ChaincodeID lcccID = ChaincodeID.newBuilder().setName(LCCC_CHAIN_NAME).build();
-
-        List<ByteString> argList = new ArrayList<>();
-        argList.add(ByteString.copyFrom("install", StandardCharsets.UTF_8));
-        argList.add(depspec.toByteString());
-
-
-        super.args(argList);
-        super.chaincodeID(lcccID);
-
-
-    }
-
-
-
-
-    public void setChaincodeLanguage(TransactionRequest.Type chaincodeLanguage) {
-        this.chaincodeLanguage = chaincodeLanguage;
     }
 
     public void chaincodeVersion(String chaincodeVersion) {

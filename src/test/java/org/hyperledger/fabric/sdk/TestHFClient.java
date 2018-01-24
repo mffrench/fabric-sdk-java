@@ -14,14 +14,13 @@
 
 package org.hyperledger.fabric.sdk;
 
-
 import java.io.File;
-import java.security.PrivateKey;
 
+import org.hyperledger.fabric.sdk.security.CryptoSuite;
 import org.hyperledger.fabric.sdkintegration.SampleStore;
 import org.hyperledger.fabric.sdkintegration.SampleUser;
-import org.hyperledger.fabric.sdk.security.CryptoSuite;
-import org.hyperledger.fabric_ca.sdk.HFCAClient;
+
+import static java.lang.String.format;
 
 public class TestHFClient {
 
@@ -35,6 +34,13 @@ public class TestHFClient {
 
     public static HFClient newInstance() throws Exception {
 
+        HFClient hfclient = HFClient.createNewInstance();
+        setupClient(hfclient);
+
+        return hfclient;
+    }
+
+    public static void setupClient(HFClient hfclient) throws Exception {
 
         File tempFile = File.createTempFile("teststore", "properties");
         tempFile.deleteOnExit();
@@ -45,50 +51,33 @@ public class TestHFClient {
         }
         final SampleStore sampleStore = new SampleStore(sampleStoreFile);
 
-        SampleUser someTestUSER = sampleStore.getMember("someTestUSER");
-        someTestUSER.setMPSID("testMSPID?");
+        //src/test/fixture/sdkintegration/e2e-2Orgs/channel/crypto-config/peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp/keystore/
 
-        HFClient hfclient = HFClient.createNewInstance();
-
-        someTestUSER.setEnrollment(new Enrollment() {
-            @Override
-            public PrivateKey getKey() {
-                return new PrivateKey() {
-                    @Override
-                    public String getAlgorithm() {
-                        return "algorithm?";
-                    }
-
-                    @Override
-                    public String getFormat() {
-                        return "format?";
-                    }
-
-                    @Override
-                    public byte[] getEncoded() {
-                        return new byte[0];
-                    }
-                };
-            }
-
-            @Override
-            public String getCert() {
-                return "fakecert?";
-            }
-
-            @Override
-            public String getPublicKey() {
-                return "publickey";
-            }
-        });
-        hfclient.setUserContext(someTestUSER);
+        //SampleUser someTestUSER = sampleStore.getMember("someTestUSER", "someTestORG");
+        SampleUser someTestUSER = sampleStore.getMember("someTestUSER", "someTestORG", "mspid",
+                findFileSk("src/test/fixture/sdkintegration/e2e-2Orgs/channel/crypto-config/peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp/keystore"),
+                new File("src/test/fixture/sdkintegration/e2e-2Orgs/channel/crypto-config/peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp/signcerts/Admin@org1.example.com-cert.pem"));
+        someTestUSER.setMspId("testMSPID?");
 
         hfclient.setCryptoSuite(CryptoSuite.Factory.getCryptoSuite());
-        hfclient.setMemberServices(new HFCAClient("http://Nowhere.com", null));
+        hfclient.setUserContext(someTestUSER);
+    }
 
-        new TestHFClient(tempFile, hfclient);
+    static File findFileSk(String directorys) {
 
-        return hfclient;
+        File directory = new File(directorys);
+
+        File[] matches = directory.listFiles((dir, name) -> name.endsWith("_sk"));
+
+        if (null == matches) {
+            throw new RuntimeException(format("Matches returned null does %s directory exist?", directory.getAbsoluteFile().getName()));
+        }
+
+        if (matches.length != 1) {
+            throw new RuntimeException(format("Expected in %s only 1 sk file but found %d", directory.getAbsoluteFile().getName(), matches.length));
+        }
+
+        return matches[0];
 
     }
 

@@ -4,7 +4,7 @@
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
  *  You may obtain a copy of the License at
- * 	  http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *  Unless required by applicable law or agreed to in writing, software
  *  distributed under the License is distributed on an "AS IS" BASIS,
  *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -25,11 +25,17 @@ import org.hyperledger.fabric.protos.common.Common;
 import org.hyperledger.fabric.protos.peer.FabricProposal;
 import org.hyperledger.fabric.protos.peer.FabricProposalResponse;
 import org.hyperledger.fabric.protos.peer.FabricTransaction;
-
+import org.hyperledger.fabric.sdk.helper.Config;
+import org.hyperledger.fabric.sdk.helper.DiagnosticFileDumper;
 
 public class TransactionBuilder {
 
-    private final static Log logger = LogFactory.getLog(TransactionBuilder.class);
+    private static final Log logger = LogFactory.getLog(TransactionBuilder.class);
+    private static final Config config = Config.getConfig();
+    private static final boolean IS_TRACE_LEVEL = logger.isTraceEnabled();
+
+    private static final DiagnosticFileDumper diagnosticFileDumper = IS_TRACE_LEVEL
+            ? config.getDiagnosticFileDumper() : null;
     private FabricProposal.Proposal chaincodeProposal;
     private Collection<FabricProposalResponse.Endorsement> endorsements;
     private ByteString proposalResponsePayload;
@@ -53,17 +59,14 @@ public class TransactionBuilder {
         return this;
     }
 
-
     public Common.Payload build() throws InvalidProtocolBufferException {
 
         return createTransactionCommonPayload(chaincodeProposal, proposalResponsePayload, endorsements);
 
     }
 
-
-    private Common.Payload createTransactionCommonPayload(FabricProposal.Proposal chaincodeProposal,  ByteString proposalResponsePayload,
+    private Common.Payload createTransactionCommonPayload(FabricProposal.Proposal chaincodeProposal, ByteString proposalResponsePayload,
                                                           Collection<FabricProposalResponse.Endorsement> endorsements) throws InvalidProtocolBufferException {
-
 
         FabricTransaction.ChaincodeEndorsedAction.Builder chaincodeEndorsedActionBuilder = FabricTransaction.ChaincodeEndorsedAction.newBuilder();
         chaincodeEndorsedActionBuilder.setProposalResponsePayload(proposalResponsePayload);
@@ -76,35 +79,46 @@ public class TransactionBuilder {
         //We need to remove any transient fields - they are not part of what the peer uses to calculate hash.
         FabricProposal.ChaincodeProposalPayload.Builder chaincodeProposalPayloadNoTransBuilder = FabricProposal.ChaincodeProposalPayload.newBuilder();
         chaincodeProposalPayloadNoTransBuilder.mergeFrom(chaincodeProposal.getPayload());
-       // chaincodeProposalPayloadNoTransBuilder.clearTransient();
+        chaincodeProposalPayloadNoTransBuilder.clearTransientMap();
 
-       // chaincodeActionPayloadBuilder.setChaincodeProposalPayload(chaincodeProposalPayloadNoTransBuilder.build().toByteString());
-        chaincodeActionPayloadBuilder.setChaincodeProposalPayload(chaincodeProposal.getPayload());
+        chaincodeActionPayloadBuilder.setChaincodeProposalPayload(chaincodeProposalPayloadNoTransBuilder.build().toByteString());
 
         FabricTransaction.TransactionAction.Builder transactionActionBuilder = FabricTransaction.TransactionAction.newBuilder();
 
         Common.Header header = Common.Header.parseFrom(chaincodeProposal.getHeader());
 
-        logger.trace("transaction header bytes:" + Arrays.toString(header.toByteArray()));
-        logger.trace("transaction header sig bytes:" + Arrays.toString(header.getSignatureHeader().toByteArray()));
+        if (config.extraLogLevel(10)) {
+
+            if (null != diagnosticFileDumper) {
+                StringBuilder sb = new StringBuilder(10000);
+                sb.append("transaction header bytes:" + Arrays.toString(header.toByteArray()));
+                sb.append("\n");
+                sb.append("transaction header sig bytes:" + Arrays.toString(header.getSignatureHeader().toByteArray()));
+                logger.trace("transaction header:  " +
+                        diagnosticFileDumper.createDiagnosticFile(sb.toString()));
+            }
+        }
 
         transactionActionBuilder.setHeader(header.getSignatureHeader());
 
         FabricTransaction.ChaincodeActionPayload chaincodeActionPayload = chaincodeActionPayloadBuilder.build();
-        logger.trace("transactionActionBuilder.setPayload" + Arrays.toString(chaincodeActionPayload.toByteString().toByteArray()));
+        if (config.extraLogLevel(10)) {
+            if (null != diagnosticFileDumper) {
+                logger.trace("transactionActionBuilder.setPayload: " +
+                        diagnosticFileDumper.createDiagnosticFile(Arrays.toString(chaincodeActionPayload.toByteString().toByteArray())));
+            }
+        }
         transactionActionBuilder.setPayload(chaincodeActionPayload.toByteString());
 
         //Transaction
         FabricTransaction.Transaction.Builder transactionBuilder = FabricTransaction.Transaction.newBuilder();
         transactionBuilder.addActions(transactionActionBuilder.build());
 
-
         Common.Payload.Builder payload = Common.Payload.newBuilder();
         payload.setHeader(header);
         payload.setData(transactionBuilder.build().toByteString());
 
         return payload.build();
-
 
     }
 

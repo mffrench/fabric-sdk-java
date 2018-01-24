@@ -1,10 +1,10 @@
 /*
- *  Copyright 2016 DTCC, Fujitsu Australia Software Technology - All Rights Reserved.
+ *  Copyright 2016, 2017 DTCC, Fujitsu Australia Software Technology, IBM - All Rights Reserved.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
  *  You may obtain a copy of the License at
- * 	  http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *  Unless required by applicable law or agreed to in writing, software
  *  distributed under the License is distributed on an "AS IS" BASIS,
  *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -14,40 +14,32 @@
 
 package org.hyperledger.fabric.sdk;
 
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.List;
+import java.util.Map;
 
-import org.hyperledger.fabric.protos.peer.Chaincode;
-import org.hyperledger.fabric.protos.peer.FabricProposal;
-import org.hyperledger.fabric.sdk.exception.CryptoException;
-import org.hyperledger.fabric.sdk.exception.ProposalException;
+import org.hyperledger.fabric.sdk.exception.InvalidArgumentException;
 import org.hyperledger.fabric.sdk.helper.Config;
-import org.hyperledger.fabric.sdk.transaction.ProposalBuilder;
-import org.hyperledger.fabric.sdk.transaction.TransactionContext;
-
-import com.google.protobuf.ByteString;
 
 /**
- * A base transaction request common for InstallProposalRequest, InvokeRequest, and QueryRequest.
+ * A base transaction request common for InstallProposalRequest,trRequest, and QueryRequest.
  */
 public class TransactionRequest {
+    private User userContext;
+
+    boolean submitted = false;
 
     private final Config config = Config.getConfig();
-    private boolean noChainID = false;  // calls to QSCC leave the chainID field as a empty string.
 
     // The local path containing the chaincode to deploy in network mode.
     protected String chaincodePath;
     // The name identifier for the chaincode to deploy in development mode.
     protected String chaincodeName;
 
-
-    // The version of the chainCode
+    // The version of the chaincode
     protected String chaincodeVersion;
     // The chaincode ID as provided by the 'submitted' event emitted by a TransactionContext
-    private ChainCodeID chaincodeID;
-
+    private ChaincodeID chaincodeID;
 
     // The name of the function to invoke
     protected String fcn;
@@ -55,8 +47,7 @@ public class TransactionRequest {
     protected ArrayList<String> args;
     // the arguments to pass to the chaincode invocation as byte arrays
     protected ArrayList<byte[]> argBytes;
-    // Optionally provide a user certificate which can be used by chaincode to perform access control
-    private Certificate userCert;
+
     // Chaincode language
     protected Type chaincodeLanguage = Type.GO_LANG;
     // The endorsementPolicy associated with this chaincode
@@ -64,18 +55,55 @@ public class TransactionRequest {
     // The timeout for a single proposal request to endorser in milliseconds
     protected long proposalWaitTime = config.getProposalWaitTime();
 
+    protected Map<String, byte[]> transientMap;
+
     /**
-     * Some peer requests (e.g. queries to QSCC) require the field to be blank.
-     * Subclasses should override this method as needed.
-     * @param proposalBuilder
+     * The user context to use on this request.
+     *
+     * @return User context that is used for signing
      */
-    public boolean noChainID() {
+    User getUserContext() {
+        return userContext;
+    }
+
+    /**
+     * Set the user context for this request. This context will override the user context set
+     * on {@link HFClient#setUserContext(User)}
+     *
+     * @param userContext The user context for this request used for signing.
+     */
+    public void setUserContext(User userContext) {
+        this.userContext = userContext;
+    }
+
+    /**
+     * Transient data added to the proposal that is not added to the ledger.
+     *
+     * @return Map of strings to bytes that's added to the proposal
+     */
+
+    public Map<String, byte[]> getTransientMap() {
+        return transientMap;
+    }
+
+    /**
+     * Determines whether an empty channel ID should be set on proposals built
+     * from this request. Some peer requests (e.g. queries to QSCC) require the
+     * field to be blank. Subclasses should override this method as needed.
+     * <p>
+     * This implementation returns {@code false}.
+     *
+     * @return {@code true} if an empty channel ID should be used; otherwise
+     * {@code false}.
+     */
+    public boolean noChannelID() {
         return false;
     }
 
     /**
      * Some proposal responses from Fabric are not signed. We default to always verify a ProposalResponse.
      * Subclasses should override this method if you do not want the response signature to be verified
+     *
      * @return true if proposal response is to be checked for a valid signature
      */
     public boolean doVerify() {
@@ -110,22 +138,22 @@ public class TransactionRequest {
         return chaincodeVersion;
     }
 
-    public ChainCodeID getChaincodeID() {
+    public ChaincodeID getChaincodeID() {
         return chaincodeID;
     }
 
-    public void setChaincodeID(ChainCodeID chaincodeID) {
+    public void setChaincodeID(ChaincodeID chaincodeID) {
 
-        if(chaincodeName != null ){
+        if (chaincodeName != null) {
 
             throw new IllegalArgumentException("Chaincode name has already been set.");
         }
-        if(chaincodeVersion != null ){
+        if (chaincodeVersion != null) {
 
             throw new IllegalArgumentException("Chaincode version has already been set.");
         }
 
-        if(chaincodePath != null ){
+        if (chaincodePath != null) {
 
             throw new IllegalArgumentException("Chaincode path has already been set.");
         }
@@ -149,7 +177,7 @@ public class TransactionRequest {
         return args;
     }
 
-    public TransactionRequest setArgs(String[] args) {
+    public TransactionRequest setArgs(String... args) {
 
         this.args = new ArrayList<>(Arrays.asList(args));
         return this;
@@ -174,12 +202,18 @@ public class TransactionRequest {
         this.args = args;
         return this;
     }
-    public Certificate getUserCert() {
-        return userCert;
-    }
 
-    public void setUserCert(Certificate userCert) {
-        this.userCert = userCert;
+    public TransactionRequest setArgs(byte[]... args) {
+
+        ArrayList<byte[]> argBytes = new ArrayList<>(args.length);
+
+        for (byte[] b : args) {
+            argBytes.add(b);
+
+        }
+
+        this.argBytes = argBytes;
+        return this;
     }
 
     //Mirror Fabric try not expose any of its classes
@@ -193,7 +227,7 @@ public class TransactionRequest {
     }
 
     /**
-     * The chain code language type: default type Type.GO_LANG
+     * The chaincode language type: default type Type.GO_LANG
      *
      * @param chaincodeLanguage . Type.Java Type.GO_LANG
      */
@@ -203,8 +237,8 @@ public class TransactionRequest {
 
     /**
      * sets the endorsementPolicy associated with the chaincode of this transaction
-     * @param policy a Policy object
      *
+     * @param policy a Policy object
      * @see ChaincodeEndorsementPolicy
      */
     public void setChaincodeEndorsementPolicy(ChaincodeEndorsementPolicy policy) {
@@ -213,8 +247,8 @@ public class TransactionRequest {
 
     /**
      * returns the Policy object associated with the chaincode of this transaction
-     * @return a Policy object
      *
+     * @return a Policy object
      * @see ChaincodeEndorsementPolicy
      */
     public ChaincodeEndorsementPolicy getChaincodeEndorsementPolicy() {
@@ -237,6 +271,30 @@ public class TransactionRequest {
      */
     public void setProposalWaitTime(long proposalWaitTime) {
         this.proposalWaitTime = proposalWaitTime;
+    }
+
+    /**
+     * If this request has been submitted already.
+     *
+     * @return true if the already submitted.
+     */
+
+    public boolean isSubmitted() {
+        return submitted;
+    }
+
+    void setSubmitted() throws InvalidArgumentException {
+
+        if (submitted) {
+            // Has already been submitted.
+            throw new InvalidArgumentException("Request has been already submitted and can not be reused.");
+        }
+        User.userContextCheck(userContext);
+        this.submitted = true;
+    }
+
+    protected TransactionRequest(User userContext) {
+        this.userContext = userContext;
     }
 
 }
