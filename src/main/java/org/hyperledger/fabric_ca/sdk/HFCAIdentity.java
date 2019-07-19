@@ -16,17 +16,18 @@
 
 package org.hyperledger.fabric_ca.sdk;
 
-import java.io.PrintWriter;
-import java.io.StringWriter;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
 
 import javax.json.Json;
 import javax.json.JsonArray;
 import javax.json.JsonArrayBuilder;
 import javax.json.JsonObject;
 import javax.json.JsonObjectBuilder;
-import javax.json.JsonWriter;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -57,8 +58,12 @@ public class HFCAIdentity {
     private HFCAClient client;
     private int statusCode;
 
+    private boolean deleted;
+
     static final String HFCA_IDENTITY = HFCAClient.HFCA_CONTEXT_ROOT + "identities";
-    private static final Log logger = LogFactory.getLog(HFCAClient.class);
+    private static final Log logger = LogFactory.getLog(HFCAIdentity.class);
+    //These attributes can not be modified with REST put request.
+    private static final Set<String> filtredUpdateAttrNames = new HashSet<>(Arrays.asList("hf.EnrollmentID", "hf.Type", "hf.Affiliation"));
 
     HFCAIdentity(String enrollmentID, HFCAClient client) throws InvalidArgumentException {
         if (Utils.isNullOrEmpty(enrollmentID)) {
@@ -140,8 +145,22 @@ public class HFCAIdentity {
         return affiliation;
     }
 
+    /**
+     * Set affiliation of the identity
+     *
+     * @param affiliation Affiliation name
+     */
     public void setAffiliation(String affiliation) {
         this.affiliation = affiliation;
+    }
+
+    /**
+     * Set affiliation of the identity
+     *
+     * @param affiliation Affiliation name
+     */
+    public void setAffiliation(HFCAAffiliation affiliation) {
+        this.affiliation = affiliation.getName();
     }
 
     /**
@@ -159,11 +178,20 @@ public class HFCAIdentity {
     }
 
     /**
+     * Returns true if the identity has been deleted
+     *
+     * @return Returns true if the identity has been deleted
+     */
+    public boolean isDeleted() {
+        return this.deleted;
+    }
+
+    /**
      * read retrieves a specific identity
      *
      * @param registrar The identity of the registrar (i.e. who is performing the registration).
      * @return statusCode The HTTP status code in the response
-     * @throws IdentityException    if retrieving an identity fails.
+     * @throws IdentityException        if retrieving an identity fails.
      * @throws InvalidArgumentException Invalid (null) argument specified
      */
 
@@ -177,8 +205,7 @@ public class HFCAIdentity {
             readIdURL = HFCA_IDENTITY + "/" + enrollmentID;
             logger.debug(format("identity  url: %s, registrar: %s", readIdURL, registrar.getName()));
 
-            String authHdr = client.getHTTPAuthCertificate(registrar.getEnrollment(), "");
-            JsonObject result = client.httpGet(readIdURL, authHdr);
+            JsonObject result = client.httpGet(readIdURL, registrar);
 
             statusCode = result.getInt("statusCode");
             if (statusCode < 400) {
@@ -199,8 +226,9 @@ public class HFCAIdentity {
 
                 logger.debug(format("identity  url: %s, registrar: %s done.", readIdURL, registrar));
             }
+            this.deleted = false;
             return statusCode;
-        }  catch (HTTPException e) {
+        } catch (HTTPException e) {
             String msg = format("[Code: %d] - Error while getting user '%s' from url '%s': %s", e.getStatusCode(), getEnrollmentId(), readIdURL, e.getMessage());
             IdentityException identityException = new IdentityException(msg, e);
             logger.error(msg);
@@ -219,11 +247,14 @@ public class HFCAIdentity {
      *
      * @param registrar The identity of the registrar (i.e. who is performing the registration).
      * @return statusCode The HTTP status code in the response
-     * @throws IdentityException    if creating an identity fails.
+     * @throws IdentityException        if creating an identity fails.
      * @throws InvalidArgumentException Invalid (null) argument specified
      */
 
     public int create(User registrar) throws IdentityException, InvalidArgumentException {
+        if (this.deleted) {
+            throw new IdentityException("Identity has been deleted");
+        }
         if (registrar == null) {
             throw new InvalidArgumentException("Registrar should be a valid member");
         }
@@ -233,14 +264,14 @@ public class HFCAIdentity {
             createURL = client.getURL(HFCA_IDENTITY);
             logger.debug(format("identity  url: %s, registrar: %s", createURL, registrar.getName()));
 
-            String body = this.toJson();
-            String authHdr = client.getHTTPAuthCertificate(registrar.getEnrollment(), body);
-            JsonObject result = client.httpPost(createURL, body, authHdr);
+            String body = client.toJson(idToJsonObject());
+            JsonObject result = client.httpPost(createURL, body, registrar);
             statusCode = result.getInt("statusCode");
-            if (statusCode >= 400) {
+            if (statusCode < 400) {
                 getHFCAIdentity(result);
                 logger.debug(format("identity  url: %s, registrar: %s done.", createURL, registrar));
             }
+            this.deleted = false;
             return statusCode;
         } catch (HTTPException e) {
             String msg = format("[Code: %d] - Error while creating user '%s' from url '%s': %s", e.getStatusCode(), getEnrollmentId(), createURL, e.getMessage());
@@ -255,16 +286,19 @@ public class HFCAIdentity {
         }
     }
 
-     /**
-     * modify an identity
+    /**
+     * update an identity
      *
      * @param registrar The identity of the registrar (i.e. who is performing the registration).
      * @return statusCode The HTTP status code in the response
-     * @throws IdentityException    if adding an identity fails.
+     * @throws IdentityException        if adding an identity fails.
      * @throws InvalidArgumentException Invalid (null) argument specified
      */
 
     public int update(User registrar) throws IdentityException, InvalidArgumentException {
+        if (this.deleted) {
+            throw new IdentityException("Identity has been deleted");
+        }
         if (registrar == null) {
             throw new InvalidArgumentException("Registrar should be a valid member");
         }
@@ -274,10 +308,9 @@ public class HFCAIdentity {
             updateURL = client.getURL(HFCA_IDENTITY + "/" + getEnrollmentId());
             logger.debug(format("identity  url: %s, registrar: %s", updateURL, registrar.getName()));
 
-            String body = this.toJson();
-            String authHdr = client.getHTTPAuthCertificate(registrar.getEnrollment(), body);
+            String body = client.toJson(idToJsonObject(filtredUpdateAttrNames));
+            JsonObject result = client.httpPut(updateURL, body, registrar);
 
-            JsonObject result = client.httpPut(updateURL, body, authHdr);
             statusCode = result.getInt("statusCode");
             if (statusCode < 400) {
                 getHFCAIdentity(result);
@@ -302,11 +335,14 @@ public class HFCAIdentity {
      *
      * @param registrar The identity of the registrar (i.e. who is performing the registration).
      * @return statusCode The HTTP status code in the response
-     * @throws IdentityException    if adding an identity fails.
+     * @throws IdentityException        if adding an identity fails.
      * @throws InvalidArgumentException Invalid (null) argument specified
      */
 
     public int delete(User registrar) throws IdentityException, InvalidArgumentException {
+        if (this.deleted) {
+            throw new IdentityException("Identity has been deleted");
+        }
         if (registrar == null) {
             throw new InvalidArgumentException("Registrar should be a valid member");
         }
@@ -316,13 +352,14 @@ public class HFCAIdentity {
             deleteURL = client.getURL(HFCA_IDENTITY + "/" + getEnrollmentId());
             logger.debug(format("identity  url: %s, registrar: %s", deleteURL, registrar.getName()));
 
-            String authHdr = client.getHTTPAuthCertificate(registrar.getEnrollment(), "");
-            JsonObject result = client.httpDelete(deleteURL, authHdr);
+            JsonObject result = client.httpDelete(deleteURL, registrar);
+
             statusCode = result.getInt("statusCode");
             if (statusCode < 400) {
                 getHFCAIdentity(result);
                 logger.debug(format("identity  url: %s, registrar: %s done.", deleteURL, registrar));
             }
+            this.deleted = true;
             return statusCode;
         } catch (HTTPException e) {
             String msg = format("[Code: %d] - Error while deleting user '%s' from url '%s': %s", e.getStatusCode(), getEnrollmentId(), deleteURL, e.getMessage());
@@ -357,17 +394,12 @@ public class HFCAIdentity {
         this.attrs = attrs;
     }
 
- // Convert the identity request to a JSON string
-    String toJson() {
-        StringWriter stringWriter = new StringWriter();
-        JsonWriter jsonWriter = Json.createWriter(new PrintWriter(stringWriter));
-        jsonWriter.writeObject(toJsonObject());
-        jsonWriter.close();
-        return stringWriter.toString();
+    // Convert the identity request to a JSON object
+    private JsonObject idToJsonObject() {
+        return idToJsonObject(Collections.emptySet());
     }
 
-    // Convert the identity request to a JSON object
-    JsonObject toJsonObject() {
+    private JsonObject idToJsonObject(Set<String> filteredAttrs) {
         JsonObjectBuilder ob = Json.createObjectBuilder();
         ob.add("id", enrollmentID);
         ob.add("type", type);
@@ -377,21 +409,19 @@ public class HFCAIdentity {
         if (affiliation != null) {
             ob.add("affiliation", affiliation);
         }
-
         JsonArrayBuilder ab = Json.createArrayBuilder();
         for (Attribute attr : attrs) {
-            ab.add(attr.toJsonObject());
+            if (!filteredAttrs.contains(attr.getName())) {
+                ab.add(attr.toJsonObject());
+            }
         }
         ob.add("attrs", ab.build());
-
-        JsonObjectBuilder ob2 = Json.createObjectBuilder();
-        ob2.add("info", ob);
         if (this.secret != null) {
-            ob2.add("secret", secret);
+            ob.add("secret", secret);
         }
         if (client.getCAName() != null) {
-            ob2.add(HFCAClient.FABRIC_CA_REQPROP, client.getCAName());
+            ob.add(HFCAClient.FABRIC_CA_REQPROP, client.getCAName());
         }
-        return ob2.build();
+        return ob.build();
     }
 }

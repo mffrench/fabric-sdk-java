@@ -14,7 +14,6 @@
 
 package org.hyperledger.fabric.sdk.transaction;
 
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
@@ -23,9 +22,13 @@ import java.util.Map;
 import com.google.protobuf.ByteString;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.hyperledger.fabric.protos.peer.Chaincode;
 import org.hyperledger.fabric.protos.peer.Chaincode.ChaincodeDeploymentSpec;
 import org.hyperledger.fabric.protos.peer.FabricProposal;
+import org.hyperledger.fabric.sdk.ChaincodeCollectionConfiguration;
 import org.hyperledger.fabric.sdk.ChaincodeEndorsementPolicy;
+import org.hyperledger.fabric.sdk.TransactionRequest;
+import org.hyperledger.fabric.sdk.exception.ChaincodeCollectionConfigurationException;
 import org.hyperledger.fabric.sdk.exception.InvalidArgumentException;
 import org.hyperledger.fabric.sdk.exception.ProposalException;
 
@@ -40,16 +43,13 @@ public class InstantiateProposalBuilder extends LSCCProposalBuilder {
     private String chaincodeName;
     private List<String> argList;
     private String chaincodeVersion;
+    private TransactionRequest.Type chaincodeType = TransactionRequest.Type.GO_LANG;
 
     private byte[] chaincodePolicy = null;
+    private byte[] chaincodeCollectionConfiguration = null;
     protected String action = "deploy";
 
     public void setTransientMap(Map<String, byte[]> transientMap) throws InvalidArgumentException {
-        if (null == transientMap) {
-
-            throw new InvalidArgumentException("Transient map may not be null");
-
-        }
         this.transientMap = transientMap;
     }
 
@@ -78,9 +78,23 @@ public class InstantiateProposalBuilder extends LSCCProposalBuilder {
 
     }
 
+    public InstantiateProposalBuilder chaincodeType(TransactionRequest.Type chaincodeType) {
+
+        this.chaincodeType = chaincodeType;
+
+        return this;
+
+    }
+
     public void chaincodEndorsementPolicy(ChaincodeEndorsementPolicy policy) {
         if (policy != null) {
             this.chaincodePolicy = policy.getChaincodeEndorsementPolicyAsBytes();
+        }
+    }
+
+    public void chaincodeCollectionConfiguration(ChaincodeCollectionConfiguration chaincodeCollectionConfiguration) throws ChaincodeCollectionConfigurationException {
+        if (chaincodeCollectionConfiguration != null) {
+            this.chaincodeCollectionConfiguration = chaincodeCollectionConfiguration.getAsBytes();
         }
     }
 
@@ -90,40 +104,69 @@ public class InstantiateProposalBuilder extends LSCCProposalBuilder {
     }
 
     @Override
-    public FabricProposal.Proposal build() throws ProposalException {
+    public FabricProposal.Proposal build() throws ProposalException, InvalidArgumentException {
 
         constructInstantiateProposal();
         return super.build();
     }
 
-    private void constructInstantiateProposal() throws ProposalException {
+    private void constructInstantiateProposal() throws ProposalException, InvalidArgumentException {
 
         try {
 
             createNetModeTransaction();
 
+        } catch (InvalidArgumentException exp) {
+            logger.error(exp);
+            throw exp;
         } catch (Exception exp) {
             logger.error(exp);
             throw new ProposalException("IO Error while creating install transaction", exp);
         }
     }
 
-    private void createNetModeTransaction() {
-        logger.debug("NetModeTransaction");
+    private void createNetModeTransaction() throws InvalidArgumentException {
+
+        if (chaincodeType == null) {
+            throw new InvalidArgumentException("Chaincode type is required");
+        }
 
         List<String> modlist = new LinkedList<>();
         modlist.add("init");
         modlist.addAll(argList);
 
+        switch (chaincodeType) {
+            case JAVA:
+                ccType(Chaincode.ChaincodeSpec.Type.JAVA);
+                break;
+            case NODE:
+                ccType(Chaincode.ChaincodeSpec.Type.NODE);
+                break;
+            case GO_LANG:
+                ccType(Chaincode.ChaincodeSpec.Type.GOLANG);
+                break;
+            default:
+                throw new InvalidArgumentException("Requested chaincode type is not supported: " + chaincodeType);
+        }
+
         ChaincodeDeploymentSpec depspec = createDeploymentSpec(ccType,
                 chaincodeName, chaincodePath, chaincodeVersion, modlist, null);
 
         List<ByteString> argList = new ArrayList<>();
-        argList.add(ByteString.copyFrom(action, StandardCharsets.UTF_8));
-        argList.add(ByteString.copyFrom(context.getChannelID(), StandardCharsets.UTF_8));
+
+        argList.add(ByteString.copyFromUtf8(action)); // command
+        argList.add(ByteString.copyFromUtf8(context.getChannelID())); //channel name.
         argList.add(depspec.toByteString());
         if (chaincodePolicy != null) {
             argList.add(ByteString.copyFrom(chaincodePolicy));
+        } else if (null != chaincodeCollectionConfiguration) {
+            argList.add(ByteString.EMPTY); //place holder for chaincodePolicy
+        }
+
+        if (null != chaincodeCollectionConfiguration) {
+            argList.add(ByteString.EMPTY); //escc name place holder
+            argList.add(ByteString.EMPTY); //vscc name place holder
+            argList.add(ByteString.copyFrom(chaincodeCollectionConfiguration));
         }
 
         args(argList);

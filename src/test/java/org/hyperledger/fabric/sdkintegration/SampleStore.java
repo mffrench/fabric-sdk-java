@@ -45,6 +45,7 @@ import org.hyperledger.fabric.sdk.Channel;
 import org.hyperledger.fabric.sdk.Enrollment;
 import org.hyperledger.fabric.sdk.HFClient;
 import org.hyperledger.fabric.sdk.exception.InvalidArgumentException;
+import org.hyperledger.fabric.sdk.security.CryptoSuite;
 
 /**
  * A local file-based key value store.
@@ -53,9 +54,9 @@ public class SampleStore {
 
     private String file;
     private Log logger = LogFactory.getLog(SampleStore.class);
+    private CryptoSuite cryptoSuite;
 
     public SampleStore(File file) {
-
         this.file = file.getAbsolutePath();
     }
 
@@ -87,7 +88,7 @@ public class SampleStore {
             properties.load(input);
             input.close();
         } catch (FileNotFoundException e) {
-            logger.warn(String.format("Could not find the file \"%s\"", file));
+            logger.info(String.format("Could not find the file \"%s\"", file));
         } catch (IOException e) {
             logger.warn(String.format("Could not load keyvalue store from file \"%s\", reason:%s",
                     file, e.getMessage()));
@@ -134,7 +135,7 @@ public class SampleStore {
         }
 
         // Create the SampleUser and try to restore it's state from the key value store (if found).
-        sampleUser = new SampleUser(name, org, this);
+        sampleUser = new SampleUser(name, org, this, cryptoSuite);
 
         return sampleUser;
 
@@ -183,7 +184,7 @@ public class SampleStore {
             }
 
             // Create the SampleUser and try to restore it's state from the key value store (if found).
-            sampleUser = new SampleUser(name, org, this);
+            sampleUser = new SampleUser(name, org, this, cryptoSuite);
             sampleUser.setMspId(mspId);
 
             String certificate = new String(IOUtils.toByteArray(new FileInputStream(certificateFile)), "UTF-8");
@@ -232,6 +233,7 @@ public class SampleStore {
         return privateKey;
     }
 
+    // Use this to make sure SDK is not dependent on HFCA enrollment for non-Idemix
     static final class SampleStoreEnrollement implements Enrollment, Serializable {
 
         private static final long serialVersionUID = -2784835212445309006L;
@@ -274,6 +276,30 @@ public class SampleStore {
 
         }
         return ret;
+    }
+
+    public void storeClientPEMTLSKey(SampleOrg sampleOrg, String key) {
+
+        setValue("clientPEMTLSKey." + sampleOrg.getName(), key);
+
+    }
+
+    public String getClientPEMTLSKey(SampleOrg sampleOrg) {
+
+        return getValue("clientPEMTLSKey." + sampleOrg.getName());
+
+    }
+
+    public void storeClientPEMTLCertificate(SampleOrg sampleOrg, String certificate) {
+
+        setValue("clientPEMTLSCertificate." + sampleOrg.getName(), certificate);
+
+    }
+
+    public String getClientPEMTLSCertificate(SampleOrg sampleOrg) {
+
+        return getValue("clientPEMTLSCertificate." + sampleOrg.getName());
+
     }
 
 }

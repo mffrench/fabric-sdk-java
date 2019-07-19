@@ -3,7 +3,7 @@
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
- *  You may obtain a copy of the License at
+ *  You may obtain a copy of the License at`
  *    http://www.apache.org/licenses/LICENSE-2.0
  *  Unless required by applicable law or agreed to in writing, software
  *  distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,45 +14,79 @@
 
 package org.hyperledger.fabric.sdk;
 
+import java.io.IOException;
+import java.io.ObjectInputStream;
 import java.io.Serializable;
 import java.util.EnumSet;
 import java.util.Objects;
 import java.util.Properties;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.atomic.AtomicLong;
 
-import com.google.common.util.concurrent.ListenableFuture;
 import io.netty.util.internal.StringUtil;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.hyperledger.fabric.protos.discovery.Protocol;
 import org.hyperledger.fabric.protos.peer.FabricProposal;
 import org.hyperledger.fabric.protos.peer.FabricProposalResponse;
 import org.hyperledger.fabric.sdk.Channel.PeerOptions;
 import org.hyperledger.fabric.sdk.exception.InvalidArgumentException;
+import org.hyperledger.fabric.sdk.exception.PeerEventingServiceException;
 import org.hyperledger.fabric.sdk.exception.PeerException;
 import org.hyperledger.fabric.sdk.exception.TransactionException;
+import org.hyperledger.fabric.sdk.helper.Config;
+import org.hyperledger.fabric.sdk.security.certgen.TLSCertificateKeyPair;
 import org.hyperledger.fabric.sdk.transaction.TransactionContext;
 
 import static java.lang.String.format;
 import static org.hyperledger.fabric.sdk.helper.Utils.checkGrpcUrl;
+import static org.hyperledger.fabric.sdk.helper.Utils.isNullOrEmpty;
+import static org.hyperledger.fabric.sdk.helper.Utils.parseGrpcUrl;
 
 /**
  * The Peer class represents a peer to which SDK sends deploy, or query proposals requests.
  */
 public class Peer implements Serializable {
 
+    public static final String PEER_ORGANIZATION_MSPID_PROPERTY = "org.hyperledger.fabric.sdk.peer.organization_mspid";
+
+    private static final Config config = Config.getConfig();
     private static final Log logger = LogFactory.getLog(Peer.class);
+    private static final boolean IS_DEBUG_LEVEL = logger.isDebugEnabled();
+    private static final boolean IS_TRACE_LEVEL = logger.isTraceEnabled();
     private static final long serialVersionUID = -5273194649991828876L;
-    private final Properties properties;
+
+    private static final long PEER_EVENT_RETRY_WAIT_TIME = config.getPeerRetryWaitTime();
+    private transient String id;
+    private Properties properties;
     private final String name;
     private final String url;
     private transient volatile EndorserClient endorserClent;
     private transient PeerEventServiceClient peerEventingClient;
-    private transient boolean shutdown = false;
+    private transient volatile boolean shutdown = false;
     private Channel channel;
-    private String channelName;
+    private String channelName; // used for logging.
     private transient TransactionContext transactionContext;
+    private transient long lastConnectTime;
+    private transient AtomicLong reconnectCount;
+    private transient BlockEvent lastBlockEvent;
+    private transient long lastBlockNumber = -1L;
+    private transient byte[] clientTLSCertificateDigest;
+    private transient boolean foundClientTLSCertificateDigest;
+    private transient boolean connected = false; // has this peer connected.
+    private String endPoint = null;
+    private String protocol = null;
+
+    // The Peer has successfully connected.
+    boolean hasConnected() {
+        return connected;
+    }
 
     Peer(String name, String grpcURL, Properties properties) throws InvalidArgumentException {
+        reconnectCount = new AtomicLong(0L);
+        id = config.getNextID();
 
         Exception e = checkGrpcUrl(grpcURL);
         if (e != null) {
@@ -66,7 +100,9 @@ public class Peer implements Serializable {
 
         this.url = grpcURL;
         this.name = name;
-        this.properties = properties == null ? null : (Properties) properties.clone(); //keep our own copy.
+        this.properties = properties == null ? new Properties() : (Properties) properties.clone(); //keep our own copy.
+
+        logger.debug("Created " + toString());
 
     }
 
@@ -92,8 +128,12 @@ public class Peer implements Serializable {
     }
 
     void unsetChannel() {
+        logger.debug(toString() + " unset " + channel);
         channel = null;
-        channelName = null;
+    }
+
+    BlockEvent getLastBlockEvent() {
+        return lastBlockEvent;
     }
 
     ExecutorService getExecutorService() {
@@ -104,11 +144,9 @@ public class Peer implements Serializable {
 
         this.transactionContext = transactionContext.retryTransactionSameContext();
 
-        if (peerEventingClient == null) {
+        if (peerEventingClient == null && !shutdown) {
 
-            //PeerEventServiceClient(Peer peer, ManagedChannelBuilder<?> channelBuilder, Properties properties)
-            //   peerEventingClient = new PeerEventServiceClient(this, new HashSet<Channel>(Arrays.asList(new Channel[] {channel})));
-            peerEventingClient = new PeerEventServiceClient(this, new Endpoint(url, properties).getChannelBuilder(), properties, peersOptions);
+            peerEventingClient = new PeerEventServiceClient(this, Endpoint.createEndpoint(url, properties), properties, peersOptions);
 
             peerEventingClient.connect(transactionContext);
 
@@ -128,6 +166,10 @@ public class Peer implements Serializable {
 
     }
 
+    boolean isShutdown() {
+        return shutdown;
+    }
+
     /**
      * Set the channel the peer is on.
      *
@@ -140,9 +182,11 @@ public class Peer implements Serializable {
             throw new InvalidArgumentException(format("Can not add peer %s to channel %s because it already belongs to channel %s.",
                     name, channel.getName(), this.channel.getName()));
         }
+        logger.debug(format("%s setting channel to %s, from %s", toString(), "" + channel, "" + this.channel));
 
         this.channel = channel;
-        channelName = channel.getName();
+        this.channelName = channel.getName();
+        toString = null; //recalculated
 
     }
 
@@ -182,55 +226,104 @@ public class Peer implements Serializable {
         return Objects.hash(name, url);
     }
 
-    ListenableFuture<FabricProposalResponse.ProposalResponse> sendProposalAsync(FabricProposal.SignedProposal proposal)
-            throws PeerException, InvalidArgumentException {
-        checkSendProposal(proposal);
+    CompletableFuture<FabricProposalResponse.ProposalResponse> sendProposalAsync(FabricProposal.SignedProposal proposal) {
+        try {
+            checkSendProposal(proposal);
+        } catch (Exception e) {
+            CompletableFuture<FabricProposalResponse.ProposalResponse> future = new CompletableFuture<>();
+            future.completeExceptionally(e);
+            return future;
+        }
 
-        logger.debug(format("peer.sendProposalAsync name: %s, url: %s", name, url));
+        if (IS_DEBUG_LEVEL) {
+            logger.debug(format("peer.sendProposalAsync %s", toString()));
+        }
 
+        EndorserClient localEndorserClient = getEndorserClient();
+
+        return localEndorserClient.sendProposalAsync(proposal).exceptionally(throwable -> {
+            removeEndorserClient(true);
+            if (throwable instanceof CompletionException) {
+                throw (CompletionException) throwable;
+            }
+            throw new CompletionException(throwable);
+        });
+
+    }
+
+    private synchronized EndorserClient getEndorserClient() {
         EndorserClient localEndorserClient = endorserClent; //work off thread local copy.
 
         if (null == localEndorserClient || !localEndorserClient.isChannelActive()) {
-            endorserClent = new EndorserClient(new Endpoint(url, properties).getChannelBuilder());
-            localEndorserClient = endorserClent;
+            if (IS_TRACE_LEVEL) {
+                logger.trace(format("Channel %s creating new endorser client %s", channelName, toString()));
+            }
+            Endpoint endpoint = Endpoint.createEndpoint(url, properties);
+            foundClientTLSCertificateDigest = true;
+            clientTLSCertificateDigest = endpoint.getClientTLSCertificateDigest();
+            localEndorserClient = new EndorserClient(channelName, name, url, endpoint.getChannelBuilder());
+            if (IS_DEBUG_LEVEL) {
+                logger.debug(format("%s created new  %s", toString(), localEndorserClient.toString()));
+            }
+            endorserClent = localEndorserClient;
         }
+        return localEndorserClient;
+    }
 
-        try {
-            return localEndorserClient.sendProposalAsync(proposal);
-        } catch (Throwable t) {
-            endorserClent = null;
-            throw t;
+    private synchronized void removeEndorserClient(boolean force) {
+        EndorserClient localEndorserClient = endorserClent;
+        endorserClent = null;
+
+        if (null != localEndorserClient) {
+            if (IS_DEBUG_LEVEL) {
+                logger.debug(format("Peer %s removing endorser client %s, isActive: %b", toString(), localEndorserClient.toString(), localEndorserClient.isChannelActive()));
+            }
+            try {
+                localEndorserClient.shutdown(force);
+            } catch (Exception e) {
+                logger.warn(toString() + " error message: " + e.getMessage());
+            }
+
         }
     }
 
-    FabricProposalResponse.ProposalResponse sendProposal(FabricProposal.SignedProposal proposal)
-            throws PeerException, InvalidArgumentException {
-        checkSendProposal(proposal);
+    CompletableFuture<Protocol.Response> sendDiscoveryRequestAsync(Protocol.SignedRequest discoveryRequest) {
+        logger.debug(format("peer.sendDiscoveryRequstAsync %s", toString()));
 
-        logger.debug(format("peer.sendProposalAsync name: %s, url: %s", name, url));
+        EndorserClient localEndorserClient = getEndorserClient();
 
-        EndorserClient localEndorserClient = endorserClent; //work off thread local copy.
-
-        if (null == localEndorserClient || !localEndorserClient.isChannelActive()) {
-            endorserClent = new EndorserClient(new Endpoint(url, properties).getChannelBuilder());
-            localEndorserClient = endorserClent;
-        }
-
-        try {
-            return localEndorserClient.sendProposal(proposal);
-        } catch (Throwable t) {
-            endorserClent = null;
-            throw t;
-        }
+        return localEndorserClient.sendDiscoveryRequestAsync(discoveryRequest).exceptionally(throwable -> {
+            removeEndorserClient(true);
+            if (throwable instanceof CompletionException) {
+                throw (CompletionException) throwable;
+            }
+            throw new CompletionException(throwable);
+        });
     }
 
-    private void checkSendProposal(FabricProposal.SignedProposal proposal) throws PeerException, InvalidArgumentException {
+    synchronized byte[] getClientTLSCertificateDigest() {
+
+        byte[] lclientTLSCertificateDigest = clientTLSCertificateDigest;
+        if (lclientTLSCertificateDigest == null) {
+            if (!foundClientTLSCertificateDigest) {
+                foundClientTLSCertificateDigest = true;
+                Endpoint endpoint = Endpoint.createEndpoint(url, properties);
+                lclientTLSCertificateDigest = endpoint.getClientTLSCertificateDigest();
+            }
+        }
+
+        return lclientTLSCertificateDigest;
+
+    }
+
+    private void checkSendProposal(FabricProposal.SignedProposal proposal) throws
+            PeerException, InvalidArgumentException {
 
         if (shutdown) {
-            throw new PeerException(format("Peer %s was shutdown.", name));
+            throw new PeerException(format("%s was shutdown.", toString()));
         }
         if (proposal == null) {
-            throw new PeerException("Proposal is null");
+            throw new PeerException(toString() + " Proposal is null");
         }
         Exception e = checkGrpcUrl(url);
         if (e != null) {
@@ -243,83 +336,280 @@ public class Peer implements Serializable {
         if (shutdown) {
             return;
         }
+        final String me = toString();
+        logger.debug(me + " is shutting down.");
         shutdown = true;
         channel = null;
+        lastBlockEvent = null;
+        lastBlockNumber = -1L;
 
-        EndorserClient lendorserClent = endorserClent;
-
-        //allow resources to finalize
-
-        endorserClent = null;
-
-        if (lendorserClent != null) {
-
-            lendorserClent.shutdown(force);
-        }
+        removeEndorserClient(force);
 
         PeerEventServiceClient lpeerEventingClient = peerEventingClient;
         peerEventingClient = null;
 
         if (null != lpeerEventingClient) {
             // PeerEventServiceClient peerEventingClient1 = peerEventingClient;
-
+            logger.debug(me + " is shutting down " + lpeerEventingClient);
             lpeerEventingClient.shutdown(force);
         }
+
+        logger.debug(me + " is shut down.");
+    }
+
+    String getEventingStatus() {
+
+        PeerEventServiceClient lpeerEventingClient = peerEventingClient;
+        if (null == lpeerEventingClient) {
+            return " eventing client service not active.";
+
+        }
+        return lpeerEventingClient.getStatus();
     }
 
     @Override
     protected void finalize() throws Throwable {
+        if (!shutdown) {
+            logger.debug(toString() + " finalized without previous shutdown.");
+        }
         shutdown(true);
         super.finalize();
     }
 
-    void reconnectPeerEventServiceClient(final PeerEventServiceClient failedPeerEventServiceClient, final Throwable t) {
+    void reconnectPeerEventServiceClient(final PeerEventServiceClient failedPeerEventServiceClient,
+                                         final Throwable throwable) {
         if (shutdown) {
-            logger.debug("Not reconnecting PeerEventServiceClient shutdown ");
+            logger.debug(toString() + "not reconnecting PeerEventServiceClient shutdown ");
             return;
+
+        }
+        PeerEventingServiceDisconnected ldisconnectedHandler = disconnectedHandler;
+        if (null == ldisconnectedHandler) {
+
+            return; // just wont reconnect.
 
         }
         TransactionContext ltransactionContext = transactionContext;
         if (ltransactionContext == null) {
 
-            logger.debug("Not reconnecting PeerEventServiceClient no transaction available ");
+            logger.warn(toString() + " not reconnecting PeerEventServiceClient no transaction available ");
+            return;
         }
+
         final TransactionContext fltransactionContext = ltransactionContext.retryTransactionSameContext();
 
         final ExecutorService executorService = getExecutorService();
-        if (executorService != null && !executorService.isShutdown() && !executorService.isTerminated()) {
+        final PeerOptions peerOptions = null != failedPeerEventServiceClient.getPeerOptions() ? failedPeerEventServiceClient.getPeerOptions() :
+                PeerOptions.createPeerOptions();
+        if (!shutdown && executorService != null && !executorService.isShutdown() && !executorService.isTerminated()) {
 
-            executorService.execute(() -> {
-                try {
-                    Thread.sleep(6000); //wait for retry.
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
-                }
-                if (shutdown) {
-                    logger.debug("Not reconnecting PeerEventServiceClient shutdown ");
-                    return;
-
+            executorService.execute(() -> ldisconnectedHandler.disconnected(new PeerEventingServiceDisconnectEvent() {
+                @Override
+                public BlockEvent getLatestBLockReceived() {
+                    return lastBlockEvent;
                 }
 
-                logger.debug(t);
+                @Override
+                public long getLastConnectTime() {
+                    return lastConnectTime;
+                }
 
-                PeerEventServiceClient lpeerEventingClient = new PeerEventServiceClient(this, new Endpoint(url, properties).getChannelBuilder(), properties, null);
+                @Override
+                public long getReconnectCount() {
+                    return reconnectCount.longValue();
+                }
 
-                try {
-                    lpeerEventingClient.connect(fltransactionContext);
-                    if (lpeerEventingClient.isChannelActive()) {
-                        logger.info(format("Channel %s PeerEventing Service %s reconnected to url %s ", channelName, name, url));
-                        peerEventingClient = lpeerEventingClient;
+                @Override
+                public Throwable getExceptionThrown() {
+                    return throwable;
+                }
 
+                @Override
+                public void reconnect(Long startBLockNumber) throws TransactionException {
+                    logger.trace(format("%s reconnecting. Starting block number: %s", Peer.this.toString(), startBLockNumber == null ? "newest" : startBLockNumber));
+                    reconnectCount.getAndIncrement();
+
+                    if (startBLockNumber == null) {
+                        peerOptions.startEventsNewest();
+                    } else {
+                        peerOptions.startEvents(startBLockNumber);
                     }
 
-                } catch (TransactionException e) {
-                    logger.debug(e);
+                    if (!shutdown) {
+                        PeerEventServiceClient lpeerEventingClient = new PeerEventServiceClient(Peer.this,
+                                Endpoint.createEndpoint(url, properties), properties, peerOptions);
+                        lpeerEventingClient.connect(fltransactionContext);
+                        peerEventingClient = lpeerEventingClient;
+                    }
+
                 }
-            });
+            }));
 
         }
 
+    }
+
+    void setLastConnectTime(long lastConnectTime) {
+        this.lastConnectTime = lastConnectTime;
+    }
+
+    void resetReconnectCount() {
+        connected = true;
+        reconnectCount = new AtomicLong(0L);
+    }
+
+    long getReconnectCount() {
+        return reconnectCount.longValue();
+    }
+
+    synchronized void setTLSCertificateKeyPair(TLSCertificateKeyPair tlsCertificateKeyPair) {
+        if (properties == null) {
+            properties = new Properties();
+        }
+        properties.put("clientKeyBytes", tlsCertificateKeyPair.getKeyPemBytes());
+        properties.put("clientCertBytes", tlsCertificateKeyPair.getCertPEMBytes());
+
+        Endpoint endpoint = Endpoint.createEndpoint(url, properties);
+        foundClientTLSCertificateDigest = true;
+        clientTLSCertificateDigest = endpoint.getClientTLSCertificateDigest();
+        removeEndorserClient(true);
+        endorserClent = new EndorserClient(channelName, name, url, endpoint.getChannelBuilder());
+    }
+
+    void setHasConnected() {
+        connected = true;
+    }
+
+    void setProperties(Properties properties) {
+        this.properties = properties == null ? new Properties() : properties;
+        toString = null; //recalculated
+    }
+
+    public interface PeerEventingServiceDisconnected {
+
+        /**
+         * Called when a disconnect is detected in peer eventing service.
+         *
+         * @param event
+         */
+        void disconnected(PeerEventingServiceDisconnectEvent event);
+
+    }
+
+    public interface PeerEventingServiceDisconnectEvent {
+
+        /**
+         * The latest BlockEvent received by peer eventing service.
+         *
+         * @return The latest BlockEvent.
+         */
+
+        BlockEvent getLatestBLockReceived();
+
+        /**
+         * Last connect time
+         *
+         * @return Last connect time as reported by System.currentTimeMillis()
+         */
+        long getLastConnectTime();
+
+        /**
+         * Number reconnection attempts since last disconnection.
+         *
+         * @return reconnect attempts.
+         */
+
+        long getReconnectCount();
+
+        /**
+         * Last exception throw for failing connection
+         *
+         * @return
+         */
+
+        Throwable getExceptionThrown();
+
+        void reconnect(Long startEvent) throws TransactionException;
+
+    }
+
+    private transient PeerEventingServiceDisconnected disconnectedHandler = getDefaultDisconnectHandler();
+
+    private static PeerEventingServiceDisconnected getDefaultDisconnectHandler() {
+        return new PeerEventingServiceDisconnected() { //default.
+            @Override
+            public synchronized void disconnected(final PeerEventingServiceDisconnectEvent event) {
+
+                BlockEvent lastBlockEvent = event.getLatestBLockReceived();
+                Throwable thrown = event.getExceptionThrown();
+
+                long sleepTime = PEER_EVENT_RETRY_WAIT_TIME;
+
+                if (thrown instanceof PeerEventingServiceException) {
+                    // means we connected and got an error or connected but timout waiting on the response
+                    // not going away.. sleep longer.
+                    sleepTime = Math.min(5000L, PEER_EVENT_RETRY_WAIT_TIME + event.getReconnectCount() * 100L); //wait longer if we connected.
+                    //don't flood server.
+                }
+
+                Long startBlockNumber = null;
+
+                if (null != lastBlockEvent) {
+
+                    startBlockNumber = lastBlockEvent.getBlockNumber();
+                }
+
+                try {
+                    Thread.sleep(sleepTime);
+                } catch (InterruptedException e) {
+                    logger.warn(toString() + " " + e.getMessage());
+                }
+
+                try {
+                    event.reconnect(startBlockNumber);
+                } catch (TransactionException e) {
+                    logger.warn(toString() + " " + e.getMessage());
+                }
+
+            }
+
+        };
+    }
+
+    /**
+     * Get current disconnect handler service
+     *
+     * @return The current disconnect handler service.
+     */
+
+    public PeerEventingServiceDisconnected getPeerEventingServiceDisconnected() {
+        return disconnectedHandler;
+    }
+
+    /**
+     * Set class to handle peer eventing service  disconnects
+     *
+     * @param newPeerEventingServiceDisconnectedHandler New handler to replace.  If set to null no retry will take place.
+     * @return the old handler.
+     */
+
+    public PeerEventingServiceDisconnected setPeerEventingServiceDisconnected(PeerEventingServiceDisconnected newPeerEventingServiceDisconnectedHandler) {
+        PeerEventingServiceDisconnected ret = disconnectedHandler;
+        disconnectedHandler = newPeerEventingServiceDisconnectedHandler;
+        return ret;
+    }
+
+    synchronized void setLastBlockSeen(BlockEvent lastBlockSeen) {
+        connected = true;
+        long newLastBlockNumber = lastBlockSeen.getBlockNumber();
+        // overkill but make sure.
+        if (lastBlockNumber < newLastBlockNumber) {
+            lastBlockNumber = newLastBlockNumber;
+            this.lastBlockEvent = lastBlockSeen;
+            if (IS_TRACE_LEVEL) {
+                logger.trace(toString() + " last block seen: " + lastBlockNumber);
+            }
+        }
     }
 
     /**
@@ -341,7 +631,12 @@ public class Peer implements Serializable {
         /**
          * Peer will monitor block events for the channel it belongs to.
          */
-        EVENT_SOURCE("eventSource");
+        EVENT_SOURCE("eventSource"),
+
+        /**
+         * Peer will monitor block events for the channel it belongs to.
+         */
+        SERVICE_DISCOVERY("serviceDiscovery");
 
         /**
          * All roles.
@@ -360,11 +655,52 @@ public class Peer implements Serializable {
         public String getPropertyName() {
             return propertyName;
         }
+
     }
+
+    String getEndpoint() {
+        if (null == endPoint) {
+            Properties properties = parseGrpcUrl(url);
+            endPoint = properties.get("host") + ":" + properties.getProperty("port").toLowerCase().trim();
+
+        }
+        return endPoint;
+    }
+
+    public String getProtocol() {
+        if (null == protocol) {
+            Properties properties = parseGrpcUrl(url);
+            protocol = properties.getProperty("protocol");
+
+        }
+        return protocol;
+    }
+
+    private transient String toString;
 
     @Override
     public String toString() {
-        return "Peer " + name + " url: " + url;
+        String ltoString = toString;
+        if (ltoString == null) {
+            String mspid = "";
 
+            if (properties != null && !isNullOrEmpty(properties.getProperty(PEER_ORGANIZATION_MSPID_PROPERTY))) {
+                mspid = ", mspid: " + properties.getProperty(PEER_ORGANIZATION_MSPID_PROPERTY);
+            }
+            ltoString = "Peer{ id: " + id + ", name: " + name + ", channelName: " + channelName + ", url: " + url + mspid + "}";
+            toString = ltoString;
+        }
+        return ltoString;
+    }
+
+    private void readObject(ObjectInputStream in) throws IOException, ClassNotFoundException {
+        in.defaultReadObject();
+        disconnectedHandler = getDefaultDisconnectHandler();
+        connected = false;
+        reconnectCount = new AtomicLong(0L);
+        id = config.getNextID();
+        lastBlockNumber = -1L;
+
+        logger.debug(format("Reserialized peer: %s", this.toString()));
     }
 } // end Peer

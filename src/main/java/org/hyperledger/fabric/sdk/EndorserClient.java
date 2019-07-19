@@ -14,42 +14,65 @@
 
 package org.hyperledger.fabric.sdk;
 
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
 
-import com.google.common.util.concurrent.ListenableFuture;
+import com.spotify.futures.CompletableFuturesExtra;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
-import io.grpc.StatusRuntimeException;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.hyperledger.fabric.protos.discovery.DiscoveryGrpc;
+import org.hyperledger.fabric.protos.discovery.Protocol;
 import org.hyperledger.fabric.protos.peer.EndorserGrpc;
 import org.hyperledger.fabric.protos.peer.FabricProposal;
 import org.hyperledger.fabric.protos.peer.FabricProposalResponse;
 import org.hyperledger.fabric.sdk.exception.PeerException;
+import org.hyperledger.fabric.sdk.helper.Config;
+
+import static java.lang.String.format;
 
 /**
  * Sample client code that makes gRPC calls to the server.
  */
 class EndorserClient {
+    private static final Config config = Config.getConfig();
     private static final Log logger = LogFactory.getLog(EndorserClient.class);
+    private static final boolean IS_TRACE_LEVEL = logger.isTraceEnabled();
 
+    //    private final String channelName;
+//    private final String name;
+//    private final String url;
     private ManagedChannel managedChannel;
-    private EndorserGrpc.EndorserBlockingStub blockingStub;
     private EndorserGrpc.EndorserFutureStub futureStub;
+    private DiscoveryGrpc.DiscoveryFutureStub discoveryFutureStub;
     private boolean shutdown = false;
+    private final String toString;
 
     /**
      * Construct client for accessing Peer server using the existing channel.
      *
      * @param channelBuilder The ChannelBuilder to build the endorser client
      */
-    EndorserClient(ManagedChannelBuilder<?> channelBuilder) {
+    EndorserClient(String channelName, String name, String url, ManagedChannelBuilder<?> channelBuilder) {
         managedChannel = channelBuilder.build();
-        blockingStub = EndorserGrpc.newBlockingStub(managedChannel);
         futureStub = EndorserGrpc.newFutureStub(managedChannel);
+        discoveryFutureStub = DiscoveryGrpc.newFutureStub(managedChannel);
+        toString = "EndorserClient{" + "id: " + config.getNextID() + ", channel: " + channelName + ", name:" + name + ", url: " + url + "}";
+        logger.trace("Created " + toString());
+
+    }
+
+    @Override
+    public String toString() {
+        return toString;
     }
 
     synchronized void shutdown(boolean force) {
+        if (IS_TRACE_LEVEL) {
+            logger.trace(format("%s shutdown called force: %b, shutdown: %b, managedChannel: %s", toString(), force, shutdown, "" + managedChannel));
+        }
         if (shutdown) {
             return;
         }
@@ -57,57 +80,94 @@ class EndorserClient {
         ManagedChannel lchannel = managedChannel;
         // let all referenced resource finalize
         managedChannel = null;
-        blockingStub = null;
+        discoveryFutureStub = null;
         futureStub = null;
 
         if (lchannel == null) {
             return;
         }
         if (force) {
-            lchannel.shutdownNow();
+
+            try {
+                lchannel.shutdownNow();
+            } catch (Exception e) {
+                logger.warn(e);
+            }
+
         } else {
             boolean isTerminated = false;
 
             try {
                 isTerminated = lchannel.shutdown().awaitTermination(3, TimeUnit.SECONDS);
             } catch (Exception e) {
-                logger.debug(e); //best effort
+                logger.debug(toString(), e); //best effort
             }
             if (!isTerminated) {
-                lchannel.shutdownNow();
+                try {
+                    lchannel.shutdownNow();
+                } catch (Exception e) {
+                    logger.warn(toString(), e);
+                }
             }
         }
     }
 
-    public ListenableFuture<FabricProposalResponse.ProposalResponse> sendProposalAsync(FabricProposal.SignedProposal proposal) throws PeerException {
+    public CompletableFuture<FabricProposalResponse.ProposalResponse> sendProposalAsync(FabricProposal.SignedProposal proposal) {
         if (shutdown) {
-            throw new PeerException("Shutdown");
+            CompletableFuture<FabricProposalResponse.ProposalResponse> ret = new CompletableFuture<>();
+            ret.completeExceptionally(new PeerException("Shutdown " + toString()));
+            return ret;
         }
-        return futureStub.processProposal(proposal);
+
+        CompletableFuture<FabricProposalResponse.ProposalResponse> future = CompletableFuturesExtra.toCompletableFuture(futureStub.processProposal(proposal));
+
+        return future.exceptionally(throwable -> {
+            throw new CompletionException(format("%s %s", toString, throwable.getMessage()), throwable);
+        });
+
+        //  return CompletableFuturesExtra.toCompletableFuture(futureStub.processProposal(proposal));
+        //  return futureStub.processProposal(proposal);
     }
 
-    public FabricProposalResponse.ProposalResponse sendProposal(FabricProposal.SignedProposal proposal) throws PeerException {
-
+    public CompletableFuture<Protocol.Response> sendDiscoveryRequestAsync(Protocol.SignedRequest signedRequest) {
         if (shutdown) {
-            throw new PeerException("Shutdown");
+            CompletableFuture<Protocol.Response> ret = new CompletableFuture<>();
+            ret.completeExceptionally(new PeerException("Shutdown " + toString()));
+            return ret;
         }
 
-        try {
-            return blockingStub.processProposal(proposal);
+        CompletableFuture<Protocol.Response> future = CompletableFuturesExtra.toCompletableFuture(discoveryFutureStub.discover(signedRequest));
+        return future.exceptionally(throwable -> {
+            throw new CompletionException(format("%s %s", toString, throwable.getMessage()), throwable);
+        });
 
-        } catch (StatusRuntimeException e) {
-            logger.warn(String.format("RPC failed: %s", e.getStatus()));
-            throw new PeerException("Sending transaction to peer failed", e);
-        }
     }
 
     boolean isChannelActive() {
         ManagedChannel lchannel = managedChannel;
-        return lchannel != null && !lchannel.isShutdown() && !lchannel.isTerminated();
+        if (null == lchannel) {
+
+            logger.trace(toString() + "Grpc channel needs creation.");
+
+            return false;
+        }
+
+        final boolean isTerminated = lchannel.isTerminated();
+        final boolean isShutdown = lchannel.isShutdown();
+        final boolean ret = !lchannel.isShutdown() && !isTerminated; // && ConnectivityState.READY.equals(lchannel.getState(true));
+        if (IS_TRACE_LEVEL) {
+            logger.trace(format("%s grpc channel isActive: %b, isShutdown: %b, isTerminated: %b, state: %s ", toString(), ret, isShutdown, isTerminated, "" + lchannel.getState(false)));
+        }
+
+        return ret;
     }
 
     @Override
     public void finalize() {
+        if (!shutdown) {
+            logger.warn(toString() + " finalized not shutdown is Active" + isChannelActive());
+        }
+
         shutdown(true);
     }
 }

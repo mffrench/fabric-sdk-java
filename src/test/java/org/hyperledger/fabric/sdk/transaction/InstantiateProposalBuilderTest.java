@@ -27,18 +27,6 @@ public class InstantiateProposalBuilderTest {
     @Rule
     public ExpectedException thrown = ExpectedException.none();
 
-
-    @Test
-    public void testSetTransientMapNull() throws Exception {
-
-        thrown.expect(InvalidArgumentException.class);
-        thrown.expectMessage("Transient map may not be null");
-
-        InstantiateProposalBuilder builder = InstantiateProposalBuilder.newBuilder();
-        builder.setTransientMap(null);
-
-    }
-
     @Test
     public void testBuild() throws Exception {
 
@@ -48,6 +36,18 @@ public class InstantiateProposalBuilderTest {
         InstantiateProposalBuilder builder = InstantiateProposalBuilder.newBuilder();
         builder.build();
 
+    }
+
+    @Test
+    public void testInvalidType() throws Exception {
+
+        thrown.expect(InvalidArgumentException.class);
+        thrown.expectMessage("Chaincode type is required");
+
+        InstantiateProposalBuilder builder = InstantiateProposalBuilder.newBuilder();
+        builder.chaincodeType(null);
+
+        builder.build();
     }
 
 

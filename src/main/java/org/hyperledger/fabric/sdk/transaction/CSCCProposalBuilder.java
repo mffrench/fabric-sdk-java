@@ -16,6 +16,7 @@ package org.hyperledger.fabric.sdk.transaction;
 
 import org.hyperledger.fabric.protos.peer.Chaincode;
 import org.hyperledger.fabric.protos.peer.FabricProposal;
+import org.hyperledger.fabric.sdk.exception.InvalidArgumentException;
 import org.hyperledger.fabric.sdk.exception.ProposalException;
 
 import static org.hyperledger.fabric.protos.peer.Chaincode.ChaincodeSpec.Type.GOLANG;
@@ -32,16 +33,10 @@ public class CSCCProposalBuilder extends ProposalBuilder {
     }
 
     @Override
-    public FabricProposal.Proposal build() throws ProposalException {
+    public FabricProposal.Proposal build() throws ProposalException, InvalidArgumentException {
 
         ccType(GOLANG);
         chaincodeID(CHAINCODE_ID_CSCC);
-
-        if (!"".equals(context.getChannel().getName())) { //if not "" this is not the system channel
-            //TODO use isSystem when public classes are interfaces.
-            throw new ProposalException("cscc chaincode not called on system channel.");
-
-        }
 
         return super.build();
 

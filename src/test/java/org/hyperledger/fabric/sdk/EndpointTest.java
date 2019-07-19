@@ -14,14 +14,27 @@
 
 package org.hyperledger.fabric.sdk;
 
+import java.math.BigInteger;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.security.PrivateKey;
+import java.security.cert.X509Certificate;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.Properties;
+import java.util.Set;
 
+import io.netty.handler.ssl.SslContextBuilder;
+import io.netty.handler.ssl.SslProvider;
 import org.junit.Assert;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.ExpectedException;
+
+import static java.lang.String.format;
+import static org.hyperledger.fabric.sdk.testutils.TestUtils.getField;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 
 public class EndpointTest {
 
@@ -48,7 +61,7 @@ public class EndpointTest {
             new Endpoint("grpcs://localhost", null);
             Assert.fail("should have thrown error as there is no port in the url");
         } catch (RuntimeException rex) {
-            Assert.assertEquals("URL must be of the format protocol://host:port", rex.getMessage());
+            Assert.assertEquals("URL must be of the format protocol://host:port. Found: 'grpcs://localhost'", rex.getMessage());
         }
 
         try {
@@ -68,8 +81,6 @@ public class EndpointTest {
 
     @Test
     public void testNullPropertySslProvider() {
-        thrown.expect(RuntimeException.class);
-        thrown.expectMessage("Property of sslProvider expected");
 
         Properties testprops = new Properties();
         testprops.setProperty("hostnameOverride", "override");
@@ -80,10 +91,10 @@ public class EndpointTest {
     @Test
     public void testEmptyPropertySslProvider() {
         thrown.expect(RuntimeException.class);
-        thrown.expectMessage("Property of sslProvider has to be either openSSL or JDK");
+        thrown.expectMessage("property of sslProvider has to be either openSSL or JDK");
 
         Properties testprops = new Properties();
-        testprops.setProperty("sslProvider", "");
+        testprops.setProperty("sslProvider", "closedSSL");
         testprops.setProperty("hostnameOverride", "override");
 
         new Endpoint("grpcs://localhost:594", testprops);
@@ -91,8 +102,6 @@ public class EndpointTest {
 
     @Test
     public void testNullPropertyNegotiationType() {
-        thrown.expect(RuntimeException.class);
-        thrown.expectMessage("Property of negotiationType expected");
 
         Properties testprops = new Properties();
         testprops.setProperty("sslProvider", "openSSL");
@@ -104,7 +113,7 @@ public class EndpointTest {
     @Test
     public void testEmptyPropertyNegotiationType() {
         thrown.expect(RuntimeException.class);
-        thrown.expectMessage("Property of negotiationType has to be either TLS or plainText");
+        thrown.expectMessage("property of negotiationType has to be either TLS or plainText");
 
         Properties testprops = new Properties();
         testprops.setProperty("sslProvider", "openSSL");
@@ -194,7 +203,7 @@ public class EndpointTest {
     @Test
     public void testBadClientKeyFile() {
         thrown.expect(RuntimeException.class);
-        thrown.expectMessage("Failed to parse TLS client key and/or cert");
+        thrown.expectMessage("Failed endpoint grpcs://localhost:594 to parse TLS client private key");
 
         Properties testprops = new Properties();
         testprops.setProperty("trustServerCertificate", "true");
@@ -211,7 +220,7 @@ public class EndpointTest {
     @Test
     public void testBadClientCertFile() {
         thrown.expect(RuntimeException.class);
-        thrown.expectMessage("Failed to parse TLS client key and/or cert");
+        thrown.expectMessage("Failed endpoint grpcs://localhost:594 to parse TLS client certificate");
 
         Properties testprops = new Properties();
         testprops.setProperty("trustServerCertificate", "true");
@@ -258,7 +267,7 @@ public class EndpointTest {
         try {
             new Endpoint("grpcs://localhost:594", testprops);
         } catch (RuntimeException e) {
-            Assert.assertEquals("Failed to parse TLS client key and/or certificate", e.getMessage());
+            Assert.assertTrue(e.getMessage().contains("Failed endpoint grpcs://localhost:594 to parse TLS client private key"));
         }
     }
 
@@ -274,7 +283,7 @@ public class EndpointTest {
         testprops.setProperty("negotiationType", "TLS");
         testprops.setProperty("clientKeyFile", System.getProperty("user.dir") + "/src/test/resources/tls-client.key");
         testprops.setProperty("clientCertFile", System.getProperty("user.dir") + "/src/test/resources/tls-client.crt");
-        new Endpoint("grpcs://localhost:594", testprops);
+        Endpoint endpoint = new Endpoint("grpcs://localhost:594", testprops);
 
         byte[] ckb = null, ccb = null;
         try {
@@ -288,5 +297,63 @@ public class EndpointTest {
         testprops.put("clientKeyBytes", ckb);
         testprops.put("clientCertBytes", ccb);
         new Endpoint("grpcs://localhost:594", testprops);
+    }
+
+    @Test
+    public void testClientTLSCACertProperties() throws Exception {
+
+        Properties testprops = new Properties();
+
+        testprops.setProperty("pemFile", "src/test/fixture/testPems/caBundled.pems," + // has 4 certs
+                "src/test/fixture/testPems/AnotherUniqCA.pem"); // has 1
+
+        testprops.put("pemBytes", Files.readAllBytes(Paths.get("src/test/fixture/testPems/Org2MSP_CA.pem"))); //Can have pem bytes too. 1 cert
+
+        class TEndpoint extends Endpoint {
+
+            private SslContextBuilder sslContextBuilder;
+
+            TEndpoint(String url, Properties properties) {
+                super(url, properties);
+            }
+
+            @Override
+            protected SslContextBuilder getSslContextBuilder(X509Certificate[] clientCert, PrivateKey clientKey, SslProvider sslprovider) {
+                sslContextBuilder = super.getSslContextBuilder(clientCert, clientKey, sslprovider);
+                return sslContextBuilder;
+            }
+
+        }
+        TEndpoint endpoint = new TEndpoint("grpcs://localhost:594", testprops);
+        X509Certificate[] certs = (X509Certificate[]) getField(endpoint.sslContextBuilder, "trustCertCollection");
+
+        Set<BigInteger> expected = new HashSet<>(Arrays.asList(
+                new BigInteger("4804555946196630157804911090140692961"),
+                new BigInteger("127556113420528788056877188419421545986539833585"),
+                new BigInteger("704500179517916368023344392810322275871763581896"),
+                new BigInteger("70307443136265237483967001545015671922421894552"),
+                new BigInteger("276393268186007733552859577416965113792"),
+                new BigInteger("217904166635533061823782766071154643254")));
+
+        for (X509Certificate cert : certs) {
+            final BigInteger serialNumber = cert.getSerialNumber();
+            assertTrue(format("Missing certificate %s", serialNumber + ""), expected.contains(serialNumber));
+        }
+        assertEquals("Didn't find the expected number of certs", expected.size(), certs.length); // should have same number.
+    }
+
+    @Test
+    public void testClientTLSCACertPropertiesBadFile() throws Exception {
+        thrown.expect(RuntimeException.class);
+        thrown.expectMessage("Failed to read certificate file");
+
+        Properties testprops = new Properties();
+
+        testprops.setProperty("pemFile", "src/test/fixture/testPems/caBundled.pems," + // has 3 certs
+                "src/test/fixture/testPems/IMBAD" +
+                ",src/test/fixture/testPems/Org1MSP_CA.pem"); // has 1
+
+        Endpoint endpoint = new Endpoint("grpcs://localhost:594", testprops);
+
     }
 }

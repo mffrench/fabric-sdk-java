@@ -17,7 +17,6 @@ package org.hyperledger.fabric.sdk.security;
 import java.io.BufferedInputStream;
 import java.io.ByteArrayInputStream;
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.FileReader;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -35,14 +34,11 @@ import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 import java.security.spec.PKCS8EncodedKeySpec;
-import java.util.ArrayList;
-import java.util.Collection;
 import java.util.Properties;
 
 import javax.xml.bind.DatatypeConverter;
 
 import org.apache.commons.compress.utils.IOUtils;
-import org.apache.commons.io.FileUtils;
 import org.bouncycastle.openssl.PEMKeyPair;
 import org.bouncycastle.openssl.PEMParser;
 import org.bouncycastle.util.encoders.Hex;
@@ -420,35 +416,6 @@ public class CryptoPrimitivesTest {
     }
 
     @Test
-    public void testLoadCACerts() {
-        try {
-            File certsFolder = new File("cacerts").getAbsoluteFile();
-            Collection<File> certFiles = FileUtils.listFiles(certsFolder, new String[] {"pem"}, false);
-            int numFiles = certFiles.size();
-            int numStore = crypto.getTrustStore().size();
-
-            BufferedInputStream bis;
-            ArrayList<byte[]> certBytesList = new ArrayList<>();
-            ArrayList<String> certIDs = new ArrayList<>();
-            byte[] certB;
-            for (File certFile : certFiles) {
-                certB = IOUtils.toByteArray(new FileInputStream(certFile));
-                certBytesList.add(certB);
-                bis = new BufferedInputStream(new ByteArrayInputStream(certB));
-                certIDs.add(Integer.toString(cf.generateCertificate(bis).hashCode()));
-            }
-            crypto.loadCACertificatesAsBytes(certBytesList);
-            assertEquals(crypto.getTrustStore().size(), numStore + numFiles);
-            for (String cID : certIDs) {
-                assertTrue(crypto.getTrustStore().containsAlias(cID));
-            }
-        } catch (KeyStoreException | CryptoException | IOException | CertificateException e) {
-            fail("testLoadCACerts should not have thrown exception. Error: " + e.getMessage());
-            e.printStackTrace();
-        }
-    }
-
-    @Test
     public void testValidateNullCertificateByteArray() {
         assertFalse(crypto.validateCertificate((byte[]) null));
     }
@@ -504,6 +471,16 @@ public class CryptoPrimitivesTest {
     public void testBytesToPrivateKey() {
         try {
             byte[] bytes = Files.readAllBytes(Paths.get(System.getProperty("user.dir") + "/src/test/resources/tls-client.key"));
+            PrivateKey pk = crypto.bytesToPrivateKey(bytes);
+        } catch (Exception e) {
+            Assert.fail("failed to parse private key bytes: " + e.toString());
+        }
+    }
+
+    @Test
+    public void testBytesToPrivateKeyPKCS8() {
+        try {
+            byte[] bytes = Files.readAllBytes(Paths.get(System.getProperty("user.dir") + "/src/test/resources/tls-client-pk8.key"));
             PrivateKey pk = crypto.bytesToPrivateKey(bytes);
         } catch (Exception e) {
             Assert.fail("failed to parse private key bytes: " + e.toString());
@@ -693,6 +670,22 @@ public class CryptoPrimitivesTest {
         crypto.setHashAlgorithm("SHA3");
         byte[] hash = crypto.hash(input);
         Assert.assertEquals(expectedHash, Hex.toHexString(hash));
+    }
+
+    /**
+     * Test makes sure we validate a certificate that has non-standard attributes as FabricCA generates.
+     *
+     * @throws Exception
+     */
+    @Test
+    public void testValidationOfCertWithFabicCAattributes() throws Exception {
+
+        CryptoSuite cryptoSuite = CryptoSuiteFactory.getDefault().getCryptoSuite();
+        byte[] onceFailingPem = Files.readAllBytes(Paths.get("src/test/fixture/testPems/peerCert.pem"));
+        byte[] caPems = Files.readAllBytes(Paths.get("src/test/fixture/testPems/caBundled.pems"));
+        CryptoPrimitives cryptoPrimitives = (CryptoPrimitives) cryptoSuite;
+        cryptoPrimitives.addCACertificatesToTrustStore(new BufferedInputStream(new ByteArrayInputStream(caPems)));
+        assertTrue(cryptoPrimitives.validateCertificate(onceFailingPem));
     }
 
 }

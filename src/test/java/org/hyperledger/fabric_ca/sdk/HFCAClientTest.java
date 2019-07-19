@@ -15,14 +15,29 @@
 package org.hyperledger.fabric_ca.sdk;
 
 import java.io.File;
+import java.math.BigInteger;
 import java.net.MalformedURLException;
+import java.net.URISyntaxException;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.KeyStore;
+import java.security.cert.X509Certificate;
+import java.util.Arrays;
+import java.util.Enumeration;
+import java.util.HashSet;
 import java.util.Properties;
+import java.util.Set;
 
 import org.hyperledger.fabric.sdk.Enrollment;
 import org.hyperledger.fabric.sdk.exception.CryptoException;
+import org.hyperledger.fabric.sdk.identity.IdemixEnrollment;
+import org.hyperledger.fabric.sdk.identity.IdemixRoles;
+import org.hyperledger.fabric.sdk.identity.X509Enrollment;
 import org.hyperledger.fabric.sdk.security.CryptoPrimitives;
 import org.hyperledger.fabric.sdk.security.CryptoSuite;
+import org.hyperledger.fabric.sdk.testutils.TestUtils;
 import org.hyperledger.fabric.sdkintegration.SampleStore;
 import org.hyperledger.fabric.sdkintegration.SampleUser;
 import org.hyperledger.fabric_ca.sdk.exception.EnrollmentException;
@@ -35,6 +50,12 @@ import org.junit.BeforeClass;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.ExpectedException;
+
+import static java.lang.String.format;
+import static org.hyperledger.fabric.sdk.testutils.TestUtils.invokeMethod;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
 
 public class HFCAClientTest {
 
@@ -81,7 +102,7 @@ public class HFCAClientTest {
 
         HFCAClient memberServices = HFCAClient.createNewInstance("http://localhost:99", null);
 
-        Assert.assertNotNull(memberServices);
+        assertNotNull(memberServices);
         Assert.assertSame(HFCAClient.class, memberServices.getClass());
     }
 
@@ -90,7 +111,7 @@ public class HFCAClientTest {
 
         HFCAClient memberServices = HFCAClient.createNewInstance("name", "http://localhost:99", null);
 
-        Assert.assertNotNull(memberServices);
+        assertNotNull(memberServices);
         Assert.assertSame(HFCAClient.class, memberServices.getClass());
 
     }
@@ -101,7 +122,7 @@ public class HFCAClientTest {
         Properties testProps = new Properties();
         HFCAClient memberServices = HFCAClient.createNewInstance("name", "http://localhost:99", testProps);
 
-        Assert.assertNotNull(memberServices);
+        assertNotNull(memberServices);
         Assert.assertSame(HFCAClient.class, memberServices.getClass());
 
     }
@@ -109,7 +130,7 @@ public class HFCAClientTest {
     @Test
     public void testNewInstanceNullUrl() throws Exception {
         thrown.expect(MalformedURLException.class);
-        HFCAClient.createNewInstance(null, null);
+        HFCAClient.createNewInstance(null, (Properties) null);
     }
 
     @Test
@@ -382,7 +403,7 @@ public class HFCAClientTest {
         HFCAClient client = HFCAClient.createNewInstance("client", "http://localhost:99", null);
         client.setCryptoSuite(crypto);
         KeyPair keypair = crypto.keyGen();
-        Enrollment enrollment = new HFCAEnrollment(keypair, "abc");
+        Enrollment enrollment = new X509Enrollment(keypair, "abc");
 
         client.revoke(admin, enrollment, "keyCompromise");
     }
@@ -397,7 +418,7 @@ public class HFCAClientTest {
         HFCAClient client = HFCAClient.createNewInstance("client", "http://localhost:99", null);
         client.setCryptoSuite(crypto);
         KeyPair keypair = crypto.keyGen();
-        Enrollment enrollment = new HFCAEnrollment(keypair, "abc");
+        Enrollment enrollment = new X509Enrollment(keypair, "abc");
 
         client.revoke(null, enrollment, "keyCompromise");
     }
@@ -436,4 +457,89 @@ public class HFCAClientTest {
         client.revoke(admin, (String) null, "keyCompromise");
     }
 
+    @Test
+    public void testTLSTrustedCertProperites() throws Throwable {
+
+        Properties testprops = new Properties();
+
+        testprops.setProperty("pemFile", "src/test/fixture/testPems/caBundled.pems," + // has 3 certs
+                " src/test/fixture/testPems/Org1MSP_CA.pem"); // has 1
+
+        testprops.put("pemBytes", Files.readAllBytes(Paths.get("src/test/fixture/testPems/Org2MSP_CA.pem")));
+
+        CryptoPrimitives crypto = new CryptoPrimitives();
+        crypto.init();
+
+        HFCAClient client = HFCAClient.createNewInstance("client", "https://localhost:99", testprops);
+        client.setCryptoSuite(crypto);
+
+        invokeMethod(client, "setUpSSL");
+
+        final KeyStore trustStore = client.cryptoPrimitives.getTrustStore();
+        final Enumeration<String> aliases = trustStore.aliases();
+
+        Set<BigInteger> expected = new HashSet<>(Arrays.asList(
+                new BigInteger("4804555946196630157804911090140692961"),
+                new BigInteger("127556113420528788056877188419421545986539833585"),
+                new BigInteger("704500179517916368023344392810322275871763581896"),
+                new BigInteger("70307443136265237483967001545015671922421894552"),
+                new BigInteger("276393268186007733552859577416965113792")));
+
+        int count = 0;
+        while (aliases.hasMoreElements()) {
+            final String alias = aliases.nextElement();
+            final X509Certificate certificate = (X509Certificate) trustStore.getCertificate(alias);
+            final BigInteger serialNumber = certificate.getSerialNumber();
+            assertTrue(format("Missing certifiate with serial no. %s", serialNumber + ""), expected.contains(serialNumber));
+            ++count;
+
+        }
+        assertEquals("Number of CA certificates mismatch", expected.size(), count);
+    }
+
+    @Test
+    public void testIdemixNullEnrollment() throws Exception {
+
+        thrown.expect(InvalidArgumentException.class);
+        thrown.expectMessage("enrollment is missing");
+
+        HFCAClient client = HFCAClient.createNewInstance("client", "http://localhost:99", null);
+        client.setCryptoSuite(crypto);
+        client.idemixEnroll(null, "idemixMSP");
+    }
+
+    @Test
+    public void testIdemixMissingMSPID() throws Exception {
+
+        thrown.expect(InvalidArgumentException.class);
+        thrown.expectMessage("mspID cannot be null or empty");
+
+        HFCAClient client = HFCAClient.createNewInstance("client", "http://localhost:99", null);
+        client.setCryptoSuite(crypto);
+        KeyPairGenerator keyGen = KeyPairGenerator.getInstance("ECDSA");
+        KeyPair pair = keyGen.generateKeyPair();
+        Enrollment enrollment = new X509Enrollment(pair, "");
+        client.idemixEnroll(enrollment, null);
+    }
+
+    @Test
+    public void testIdemixWrongEnrollment() throws Exception {
+
+        thrown.expect(InvalidArgumentException.class);
+        thrown.expectMessage("enrollment type must be x509");
+
+        HFCAClient client = HFCAClient.createNewInstance("client", "http://localhost:99", null);
+        client.setCryptoSuite(crypto);
+        Enrollment enrollment = new IdemixEnrollment(null, null, "mspid", null, null, null, "ou", (Integer) TestUtils.getField(IdemixRoles.MEMBER, "value"));
+        client.idemixEnroll(enrollment, "mspid");
+    }
+
+    @Test
+    public void testAddCAToURL() throws MalformedURLException, URISyntaxException, InvalidArgumentException {
+        final String url = "http://localhost:99";
+        HFCAClient client = HFCAClient.createNewInstance("ca1", url, null);
+        client.setCryptoSuite(crypto);
+        String url2 = client.addCAToURL(url);
+        assertEquals(url + "?ca=ca1", url2);
+    }
 }

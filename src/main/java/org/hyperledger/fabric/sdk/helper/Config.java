@@ -20,6 +20,8 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Properties;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -43,6 +45,8 @@ public class Config {
 
     private static final String DEFAULT_CONFIG = "config.properties";
     public static final String ORG_HYPERLEDGER_FABRIC_SDK_CONFIGURATION = "org.hyperledger.fabric.sdk.configuration";
+
+    private static final String DEFAULT_NULL = "\0DEFAULT_NULL\0".intern(); // Used to set value to NULL since null won't work.
     /**
      * Timeout settings
      **/
@@ -51,10 +55,13 @@ public class Config {
     public static final String TRANSACTION_CLEANUP_UP_TIMEOUT_WAIT_TIME = "org.hyperledger.fabric.sdk.client.transaction_cleanup_up_timeout_wait_time";
     public static final String ORDERER_RETRY_WAIT_TIME = "org.hyperledger.fabric.sdk.orderer_retry.wait_time";
     public static final String ORDERER_WAIT_TIME = "org.hyperledger.fabric.sdk.orderer.ordererWaitTimeMilliSecs";
-    public static final String EVENTHUB_CONNECTION_WAIT_TIME = "org.hyperledger.fabric.sdk.eventhub_connection.wait_time";
+    public static final String PEER_EVENT_REGISTRATION_WAIT_TIME = "org.hyperledger.fabric.sdk.peer.eventRegistration.wait_time";
+    public static final String PEER_EVENT_RETRY_WAIT_TIME = "org.hyperledger.fabric.sdk.peer.retry_wait_time";
+
+    public static final String PEER_EVENT_RECONNECTION_WARNING_RATE = "org.hyperledger.fabric.sdk.peer.reconnection_warning_rate";
     public static final String GENESISBLOCK_WAIT_TIME = "org.hyperledger.fabric.sdk.channel.genesisblock_wait_time";
     /**
-     * Crypto configuration settings
+     * Crypto configuration settings -- settings should not be changed.
      **/
     public static final String DEFAULT_CRYPTO_SUITE_FACTORY = "org.hyperledger.fabric.sdk.crypto.default_crypto_suite_factory";
     public static final String SECURITY_LEVEL = "org.hyperledger.fabric.sdk.security_level";
@@ -73,12 +80,42 @@ public class Config {
     public static final String DIAGNOTISTIC_FILE_DIRECTORY = "org.hyperledger.fabric.sdk.diagnosticFileDir"; //ORG_HYPERLEDGER_FABRIC_SDK_DIAGNOSTICFILEDIR
 
     /**
+     * Connections settings
+     */
+
+    public static final String CONN_SSL_PROVIDER = "org.hyperledger.fabric.sdk.connections.ssl.sslProvider";
+    public static final String CONN_SSL_NEGTYPE = "org.hyperledger.fabric.sdk.connections.ssl.negotiationType";
+
+    /**
+     * Default HFClient thread executor settings.
+     */
+
+    public static final String CLIENT_THREAD_EXECUTOR_COREPOOLSIZE = "org.hyperledger.fabric.sdk.client.thread_executor_corepoolsize";
+    public static final String CLIENT_THREAD_EXECUTOR_MAXIMUMPOOLSIZE = "org.hyperledger.fabric.sdk.client.thread_executor_maximumpoolsize";
+    public static final String CLIENT_THREAD_EXECUTOR_KEEPALIVETIME = "org.hyperledger.fabric.sdk.client.thread_executor_keepalivetime";
+    public static final String CLIENT_THREAD_EXECUTOR_KEEPALIVETIMEUNIT = "org.hyperledger.fabric.sdk.client.thread_executor_keepalivetimeunit";
+
+    /**
      * Miscellaneous settings
      **/
     public static final String PROPOSAL_CONSISTENCY_VALIDATION = "org.hyperledger.fabric.sdk.proposal.consistency_validation";
 
+    public static final String SERVICE_DISCOVER_FREQ_SECONDS = "org.hyperledger.fabric.sdk.service_discovery.frequency_sec";
+    public static final String SERVICE_DISCOVER_WAIT_TIME = "org.hyperledger.fabric.sdk.service_discovery.discovery_wait_time";
+
+    public static final String LIFECYCLE_CHAINCODE_ENDORSEMENT_PLUGIN = "org.hyperledger.fabric.sdk.lifecycle.chaincode_endorsement_plugin"; //ORG_HYPERLEDGER_FABRIC_SDK_LIFECYCLE_CHAINCODE_ENDORSEMENT_PLUGIN
+
+    public static final String LIFECYCLE_CHAINCODE_VALIDATION_PLUGIN = "org.hyperledger.fabric.sdk.lifecycle.chaincode_validation_plugin";   //ORG_HYPERLEDGER_FABRIC_SDK_LIFECYCLE_CHAINCODE_VALIDATION_PLUGIN
+    public static final String LIFECYCLE_INITREQUIREDDEFAULT = "org.hyperledger.fabric.sdk.lifecycle.initRequiredDefault";   //ORG_HYPERLEDGER_FABRIC_SDK_LIFECYCLE_INITREQUIREDDEFAULT
+
     private static Config config;
     private static final Properties sdkProperties = new Properties();
+    private static final AtomicLong count = new AtomicLong(0);
+
+    //Provides a unique id for logging to identify a specific instance.
+    public String getNextID() {
+        return "" + count.incrementAndGet();
+    }
 
     private Config() {
         File loadFile;
@@ -101,11 +138,13 @@ public class Config {
             /**
              * Timeout settings
              **/
-            defaultProperty(PROPOSAL_WAIT_TIME, "20000");
+            defaultProperty(PROPOSAL_WAIT_TIME, "35000");
             defaultProperty(CHANNEL_CONFIG_WAIT_TIME, "15000");
             defaultProperty(ORDERER_RETRY_WAIT_TIME, "200");
             defaultProperty(ORDERER_WAIT_TIME, "10000");
-            defaultProperty(EVENTHUB_CONNECTION_WAIT_TIME, "1000");
+            defaultProperty(PEER_EVENT_REGISTRATION_WAIT_TIME, "5000");
+            defaultProperty(PEER_EVENT_RETRY_WAIT_TIME, "500");
+
             defaultProperty(GENESISBLOCK_WAIT_TIME, "5000");
             /**
              * This will NOT complete any transaction futures time out and must be kept WELL above any expected future timeout
@@ -128,6 +167,22 @@ public class Config {
             defaultProperty(SIGNATURE_ALGORITHM, "SHA256withECDSA");
 
             /**
+             * Connection defaults
+             */
+
+            defaultProperty(CONN_SSL_PROVIDER, "openSSL");
+            defaultProperty(CONN_SSL_NEGTYPE, "TLS");
+
+            /**
+             * Default HFClient thread executor settings.
+             */
+
+            defaultProperty(CLIENT_THREAD_EXECUTOR_COREPOOLSIZE, "0");
+            defaultProperty(CLIENT_THREAD_EXECUTOR_MAXIMUMPOOLSIZE, "" + Integer.MAX_VALUE);
+            defaultProperty(CLIENT_THREAD_EXECUTOR_KEEPALIVETIME, "" + "60");
+            defaultProperty(CLIENT_THREAD_EXECUTOR_KEEPALIVETIMEUNIT, "SECONDS");
+
+            /**
              * Logging settings
              **/
             defaultProperty(MAX_LOG_STRING_LENGTH, "64");
@@ -138,6 +193,14 @@ public class Config {
              * Miscellaneous settings
              */
             defaultProperty(PROPOSAL_CONSISTENCY_VALIDATION, "true");
+
+            defaultProperty(PEER_EVENT_RECONNECTION_WARNING_RATE, "50");
+
+            defaultProperty(SERVICE_DISCOVER_FREQ_SECONDS, "120");
+            defaultProperty(SERVICE_DISCOVER_WAIT_TIME, "5000");
+            defaultProperty(LIFECYCLE_CHAINCODE_ENDORSEMENT_PLUGIN, DEFAULT_NULL);
+            defaultProperty(LIFECYCLE_CHAINCODE_VALIDATION_PLUGIN, DEFAULT_NULL);
+            defaultProperty(LIFECYCLE_INITREQUIREDDEFAULT, DEFAULT_NULL);
 
             final String inLogLevel = sdkProperties.getProperty(LOGGERLEVEL);
 
@@ -204,10 +267,12 @@ public class Config {
      */
     private String getProperty(String property) {
 
-        String ret = sdkProperties.getProperty(property);
-
-        if (null == ret) {
+        if (!sdkProperties.containsKey(property)) {
             logger.warn(format("No configuration value found for '%s'", property));
+        }
+        String ret = sdkProperties.getProperty(property);
+        if (ret == DEFAULT_NULL) {
+            ret = null;
         }
         return ret;
     }
@@ -260,6 +325,27 @@ public class Config {
      */
     public String getHashAlgorithm() {
         return getProperty(HASH_ALGORITHM);
+
+    }
+
+    /**
+     * The default ssl provider for grpc connection
+     *
+     * @return The default ssl provider for grpc connection
+     */
+    public String getDefaultSSLProvider() {
+        return getProperty(CONN_SSL_PROVIDER);
+
+    }
+
+    /**
+     * The default ssl negotiation type
+     *
+     * @return The default ssl negotiation type
+     */
+
+    public String getDefaultSSLNegotiationType() {
+        return getProperty(CONN_SSL_NEGTYPE);
 
     }
 
@@ -348,8 +434,44 @@ public class Config {
         return Long.parseLong(getProperty(ORDERER_WAIT_TIME));
     }
 
-    public long getEventHubConnectionWaitTime() {
-        return Long.parseLong(getProperty(EVENTHUB_CONNECTION_WAIT_TIME));
+    /**
+     * getPeerEventRegistrationWaitTime
+     *
+     * @return time in milliseconds to wait for peer eventing service to wait for event registration
+     */
+    public long getPeerEventRegistrationWaitTime() {
+        return Long.parseLong(getProperty(PEER_EVENT_REGISTRATION_WAIT_TIME));
+    }
+
+    /**
+     * getPeerEventRegistrationWaitTime
+     *
+     * @return time in milliseconds to wait for peer eventing service to wait for event registration
+     */
+    public long getPeerRetryWaitTime() {
+        return Long.parseLong(getProperty(PEER_EVENT_RETRY_WAIT_TIME));
+    }
+
+    public long getPeerEventReconnectionWarningRate() {
+        return Long.parseLong(getProperty(PEER_EVENT_RECONNECTION_WARNING_RATE));
+    }
+
+    /**
+     * How often serviced discovery is preformed in seconds.
+     *
+     * @return
+     */
+    public int getServiceDiscoveryFreqSeconds() {
+        return Integer.parseInt(getProperty(SERVICE_DISCOVER_FREQ_SECONDS));
+    }
+
+    /**
+     * Time to wait for service discovery to complete.
+     *
+     * @return
+     */
+    public int getServiceDiscoveryWaitTime() {
+        return Integer.parseInt(getProperty(SERVICE_DISCOVER_WAIT_TIME));
     }
 
     public String getAsymmetricKeyType() {
@@ -428,5 +550,88 @@ public class Config {
      */
     public long getTransactionListenerCleanUpTimeout() {
         return Long.parseLong(getProperty(TRANSACTION_CLEANUP_UP_TIMEOUT_WAIT_TIME));
+    }
+
+    /**
+     * The number of threads to keep in the pool, even if they are idle, unless {@code allowCoreThreadTimeOut} is set
+     *
+     * @return The number of threads to keep in the pool, even if they are idle, unless {@code allowCoreThreadTimeOut} is set
+     */
+
+    public int getClientThreadExecutorCorePoolSize() {
+        return Integer.parseInt(getProperty(CLIENT_THREAD_EXECUTOR_COREPOOLSIZE));
+    }
+
+    /**
+     * maximumPoolSize the maximum number of threads to allow in the pool
+     *
+     * @return maximumPoolSize the maximum number of threads to allow in the pool
+     */
+    public int getClientThreadExecutorMaxiumPoolSize() {
+        return Integer.parseInt(getProperty(CLIENT_THREAD_EXECUTOR_MAXIMUMPOOLSIZE));
+    }
+
+    /**
+     * keepAliveTime when the number of threads is greater than
+     * the core, this is the maximum time that excess idle threads
+     * will wait for new tasks before terminating.
+     *
+     * @return The keep alive time.
+     */
+
+    public long getClientThreadExecutorKeepAliveTime() {
+        return Long.parseLong(getProperty(CLIENT_THREAD_EXECUTOR_KEEPALIVETIME));
+    }
+
+    /**
+     * the time unit for the argument
+     *
+     * @return
+     */
+
+    public TimeUnit getClientThreadExecutorKeepAliveTimeUnit() {
+
+        return TimeUnit.valueOf(getProperty(CLIENT_THREAD_EXECUTOR_KEEPALIVETIMEUNIT));
+    }
+
+    /**
+     * The default chaincode Endorsement policy plugin
+     * <p>
+     * This should never need setting
+     *
+     * @return The default chaincode Endorsement policy plugin
+     */
+
+    public String getDefaultChaincodeEndorsementPlugin() {
+        return getProperty(LIFECYCLE_CHAINCODE_ENDORSEMENT_PLUGIN);
+    }
+
+    /**
+     * The default chaincode validation plugin
+     * This should never need setting.
+     *
+     * @return The default chaincode validation plugin
+     */
+    public String getDefaultChaincodeValidationPlugin() {
+        return getProperty(LIFECYCLE_CHAINCODE_VALIDATION_PLUGIN);
+    }
+
+    /**
+     * Whether require init method in chaincode to be run.
+     * The default will return null which will not set the Fabric protobuf value which then sets false. False is the Fabric
+     * default.
+     *
+     * @return The default setting for initRequired in chaincode approve for my org and commit chaincode definition.
+     */
+    public Boolean getLifecycleInitRequiredDefault() {
+
+        String property = getProperty(LIFECYCLE_INITREQUIREDDEFAULT);
+        if (property != null) {
+
+            return Boolean.parseBoolean(property);
+
+        }
+
+        return null;
     }
 }

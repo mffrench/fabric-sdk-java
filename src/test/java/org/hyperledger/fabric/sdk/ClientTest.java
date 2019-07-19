@@ -14,12 +14,15 @@
 
 package org.hyperledger.fabric.sdk;
 
+import java.util.concurrent.Executors;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 import org.hyperledger.fabric.sdk.exception.InvalidArgumentException;
 import org.hyperledger.fabric.sdk.helper.Config;
 import org.hyperledger.fabric.sdk.security.CryptoSuite;
 import org.hyperledger.fabric.sdk.testutils.TestUtils;
-import org.hyperledger.fabric.sdk.testutils.TestUtils.MockEnrollment;
 import org.hyperledger.fabric.sdk.testutils.TestUtils.MockUser;
 import org.junit.Assert;
 import org.junit.BeforeClass;
@@ -27,6 +30,7 @@ import org.junit.Ignore;
 import org.junit.Test;
 
 import static org.hyperledger.fabric.sdk.testutils.TestUtils.resetConfig;
+import static org.junit.Assert.assertSame;
 
 public class ClientTest {
     private static final String CHANNEL_NAME = "channel1";
@@ -34,7 +38,6 @@ public class ClientTest {
 
     private static final String USER_NAME = "MockMe";
     private static final String USER_MSP_ID = "MockMSPID";
-
 
     @BeforeClass
     public static void setupClient() throws Exception {
@@ -190,7 +193,7 @@ public class ClientTest {
 
         MockUser mockUser = TestUtils.getMockUser(USER_NAME, USER_MSP_ID);
 
-        MockEnrollment mockEnrollment = TestUtils.getMockEnrollment(null);
+        Enrollment mockEnrollment = TestUtils.getMockEnrollment(null);
         mockUser.setEnrollment(mockEnrollment);
 
         client.setUserContext(mockUser);
@@ -202,14 +205,88 @@ public class ClientTest {
         HFClient client = HFClient.createNewInstance();
         client.setCryptoSuite(CryptoSuite.Factory.getCryptoSuite());
 
-
         MockUser mockUser = TestUtils.getMockUser(USER_NAME, USER_MSP_ID);
 
-        MockEnrollment mockEnrollment = TestUtils.getMockEnrollment(null, "mockCert");
+        Enrollment mockEnrollment = TestUtils.getMockEnrollment(null, "mockCert");
         mockUser.setEnrollment(mockEnrollment);
 
         client.setUserContext(mockUser);
 
+    }
+
+    @Test
+    public void testExecutorset() throws Exception {
+
+        hfclient = TestHFClient.newInstance();
+        //    ThreadPoolExecutor threadPoolExecutor = ThreadPoolExecutor()
+        ThreadPoolExecutor threadPoolExecutor = new ThreadPoolExecutor(10, 100,
+                40, TimeUnit.valueOf("MILLISECONDS"),
+                new SynchronousQueue<Runnable>(),
+                r -> {
+                    Thread t = Executors.defaultThreadFactory().newThread(r);
+                    t.setDaemon(true);
+                    return t;
+                });
+
+        hfclient.setExecutorService(threadPoolExecutor);
+        assertSame(threadPoolExecutor, hfclient.getExecutorService());
+        Channel mychannel = hfclient.newChannel("mychannel");
+        assertSame(threadPoolExecutor, mychannel.getExecutorService());
+
+    }
+
+    @Test (expected = InvalidArgumentException.class)
+    public void testExecutorsetAgain() throws Exception {
+
+        hfclient = TestHFClient.newInstance();
+
+        ThreadPoolExecutor threadPoolExecutor = new ThreadPoolExecutor(10, 100,
+                40, TimeUnit.valueOf("MILLISECONDS"),
+                new SynchronousQueue<Runnable>(),
+                r -> {
+                    Thread t = Executors.defaultThreadFactory().newThread(r);
+                    t.setDaemon(true);
+                    return t;
+                });
+
+        hfclient.setExecutorService(threadPoolExecutor);
+        assertSame(threadPoolExecutor, hfclient.getExecutorService());
+        ThreadPoolExecutor threadPoolExecutor2 = new ThreadPoolExecutor(10, 100,
+                40, TimeUnit.valueOf("MILLISECONDS"),
+                new SynchronousQueue<Runnable>(),
+                r -> {
+                    Thread t = Executors.defaultThreadFactory().newThread(r);
+                    t.setDaemon(true);
+                    return t;
+                });
+        hfclient.setExecutorService(threadPoolExecutor2);
+    }
+
+    @Test (expected = InvalidArgumentException.class)
+    public void testExecutorDefaultSet() throws Exception {
+
+        hfclient = TestHFClient.newInstance();
+
+        ThreadPoolExecutor threadPoolExecutor = new ThreadPoolExecutor(10, 100,
+                40, TimeUnit.valueOf("MILLISECONDS"),
+                new SynchronousQueue<Runnable>(),
+                r -> {
+                    Thread t = Executors.defaultThreadFactory().newThread(r);
+                    t.setDaemon(true);
+                    return t;
+                });
+
+        Channel badisme = hfclient.newChannel("badisme");
+        badisme.getExecutorService();
+        hfclient.setExecutorService(threadPoolExecutor);
+    }
+
+    @Test (expected = InvalidArgumentException.class)
+    public void testExecutorsetNULL() throws Exception {
+
+        hfclient = TestHFClient.newInstance();
+
+        hfclient.setExecutorService(null);
     }
 
     @Test //(expected = InvalidArgumentException.class)
@@ -225,7 +302,7 @@ public class ClientTest {
 
             MockUser mockUser = TestUtils.getMockUser(USER_NAME, USER_MSP_ID);
 
-            MockEnrollment mockEnrollment = TestUtils.getMockEnrollment(null, "mockCert");
+            Enrollment mockEnrollment = TestUtils.getMockEnrollment(null, "mockCert");
             mockUser.setEnrollment(mockEnrollment);
 
             client.setUserContext(mockUser);

@@ -15,12 +15,12 @@
 package org.hyperledger.fabric.sdkintegration;
 
 import java.io.File;
-import java.security.PrivateKey;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -37,6 +37,8 @@ import org.hyperledger.fabric.sdk.HFClient;
 import org.hyperledger.fabric.sdk.InstallProposalRequest;
 import org.hyperledger.fabric.sdk.InstantiateProposalRequest;
 import org.hyperledger.fabric.sdk.NetworkConfig;
+import org.hyperledger.fabric.sdk.NetworkConfig.CAInfo;
+import org.hyperledger.fabric.sdk.NetworkConfig.UserInfo;
 import org.hyperledger.fabric.sdk.Orderer;
 import org.hyperledger.fabric.sdk.Peer;
 import org.hyperledger.fabric.sdk.ProposalResponse;
@@ -50,15 +52,19 @@ import org.hyperledger.fabric.sdk.exception.ProposalException;
 import org.hyperledger.fabric.sdk.exception.TransactionEventException;
 import org.hyperledger.fabric.sdk.security.CryptoSuite;
 import org.hyperledger.fabric.sdk.testutils.TestConfig;
-import org.hyperledger.fabric.sdk.testutils.TestUtils;
 import org.hyperledger.fabric.sdk.testutils.TestUtils.MockUser;
+import org.hyperledger.fabric_ca.sdk.HFCAClient;
+import org.hyperledger.fabric_ca.sdk.HFCAInfo;
+import org.hyperledger.fabric_ca.sdk.RegistrationRequest;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
 import static java.lang.String.format;
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static org.hyperledger.fabric.sdk.testutils.TestUtils.getMockUser;
 import static org.hyperledger.fabric.sdk.testutils.TestUtils.resetConfig;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -97,6 +103,8 @@ public class NetworkConfigIT {
 
     private static NetworkConfig networkConfig;
 
+    private static Map<String, User> orgRegisteredUsers = new HashMap<>();
+
     @BeforeClass
     public static void doMainSetup() throws Exception {
         out("\n\n\nRUNNING: NetworkConfigIT.\n");
@@ -107,7 +115,69 @@ public class NetworkConfigIT {
         // Use the appropriate TLS/non-TLS network config file
         networkConfig = NetworkConfig.fromYamlFile(testConfig.getTestNetworkConfigFileYAML());
 
-        // Ensure the chaincode required for these tests is deployed
+        networkConfig.getOrdererNames().forEach(ordererName -> {
+            try {
+                Properties ordererProperties = networkConfig.getOrdererProperties(ordererName);
+                Properties testProp = testConfig.getEndPointProperties("orderer", ordererName);
+                ordererProperties.setProperty("clientCertFile", testProp.getProperty("clientCertFile"));
+                ordererProperties.setProperty("clientKeyFile", testProp.getProperty("clientKeyFile"));
+                networkConfig.setOrdererProperties(ordererName, ordererProperties);
+
+            } catch (InvalidArgumentException e) {
+                throw new RuntimeException(e);
+            }
+        });
+
+        networkConfig.getPeerNames().forEach(peerName -> {
+            try {
+                Properties peerProperties = networkConfig.getPeerProperties(peerName);
+                Properties testProp = testConfig.getEndPointProperties("peer", peerName);
+                peerProperties.setProperty("clientCertFile", testProp.getProperty("clientCertFile"));
+                peerProperties.setProperty("clientKeyFile", testProp.getProperty("clientKeyFile"));
+                networkConfig.setPeerProperties(peerName, peerProperties);
+
+            } catch (InvalidArgumentException e) {
+                throw new RuntimeException(e);
+            }
+        });
+
+        //Check if we get access to defined CAs!
+        NetworkConfig.OrgInfo org = networkConfig.getOrganizationInfo("Org1");
+        CAInfo caInfo = org.getCertificateAuthorities().get(0);
+
+        HFCAClient hfcaClient = HFCAClient.createNewInstance(caInfo);
+        assertEquals(hfcaClient.getCAName(), caInfo.getCAName());
+        HFCAInfo info = hfcaClient.info(); //makes actual REST call.
+        assertEquals(caInfo.getCAName(), info.getCAName());
+
+        Collection<UserInfo> registrars = caInfo.getRegistrars();
+        assertTrue(!registrars.isEmpty());
+        UserInfo registrar = registrars.iterator().next();
+        registrar.setEnrollment(hfcaClient.enroll(registrar.getName(), registrar.getEnrollSecret()));
+        MockUser mockuser = getMockUser(org.getName() + "_mock_" + System.nanoTime(), registrar.getMspId());
+        RegistrationRequest rr = new RegistrationRequest(mockuser.getName(), "org1.department1");
+        mockuser.setEnrollmentSecret(hfcaClient.register(rr, registrar));
+        mockuser.setEnrollment(hfcaClient.enroll(mockuser.getName(), mockuser.getEnrollmentSecret()));
+        orgRegisteredUsers.put(org.getName(), mockuser);
+
+        org = networkConfig.getOrganizationInfo("Org2");
+        caInfo = org.getCertificateAuthorities().get(0);
+
+        hfcaClient = HFCAClient.createNewInstance(caInfo);
+        assertEquals(hfcaClient.getCAName(), caInfo.getCAName());
+        info = hfcaClient.info(); //makes actual REST call.
+        assertEquals(info.getCAName(), "");
+
+        registrars = caInfo.getRegistrars();
+        assertTrue(!registrars.isEmpty());
+        registrar = registrars.iterator().next();
+        registrar.setEnrollment(hfcaClient.enroll(registrar.getName(), registrar.getEnrollSecret()));
+        mockuser = getMockUser(org.getName() + "_mock_" + System.nanoTime(), registrar.getMspId());
+        rr = new RegistrationRequest(mockuser.getName(), "org1.department1");
+        mockuser.setEnrollmentSecret(hfcaClient.register(rr, registrar));
+        mockuser.setEnrollment(hfcaClient.enroll(mockuser.getName(), mockuser.getEnrollmentSecret()));
+        orgRegisteredUsers.put(org.getName(), mockuser);
+
         deployChaincodeIfRequired();
     }
 
@@ -144,19 +214,7 @@ public class NetworkConfigIT {
 
     private static User getAdminUser(String orgName) throws Exception {
 
-        NetworkConfig.UserInfo userInfo = networkConfig.getPeerAdmin(orgName);
-        //NetworkConfig.UserInfo userInfo = networkConfig.getPeerAdmin();
-
-        String userName = userInfo.getEnrollId();
-        String mspId = userInfo.getMspId();
-
-        PrivateKey privateKey = userInfo.getPrivateKey();
-        String signedCert = userInfo.getSignedCert();
-
-        MockUser admin = TestUtils.getMockUser(userName, mspId);
-        admin.setEnrollment(TestUtils.getMockEnrollment(privateKey, signedCert));
-
-        return admin;
+        return networkConfig.getPeerAdmin(orgName);
     }
 
     @Test
@@ -174,11 +232,19 @@ public class NetworkConfigIT {
 
         out("Running testUpdate1 - Channel %s", channelName);
 
+        final Collection<String> peersOrganizationMSPIDs = channel.getPeersOrganizationMSPIDs();
+        assertNotNull(peersOrganizationMSPIDs);
+        assertEquals(1, peersOrganizationMSPIDs.size());
+        assertEquals("Org1MSP", peersOrganizationMSPIDs.iterator().next());
+
         int moveAmount = 5;
         String originalVal = queryChaincodeForCurrentValue(client, channel, chaincodeID);
         String newVal = "" + (Integer.parseInt(originalVal) + moveAmount);
 
         out("Original value = %s", originalVal);
+
+        //user registered user
+        client.setUserContext(orgRegisteredUsers.get("Org1")); // only using org1
 
         // Move some assets
         moveAmount(client, channel, chaincodeID, "a", "b", "" + moveAmount, null).thenApply(transactionEvent -> {
@@ -222,6 +288,7 @@ public class NetworkConfigIT {
         channel.shutdown(true); // Force channel to shutdown clean up resources.
 
         out("testUpdate1 - done");
+        out("That's all folks!");
     }
 
     private static void queryChaincodeForExpectedValue(HFClient client, Channel channel, final String expect, ChaincodeID chaincodeID) {
@@ -238,8 +305,8 @@ public class NetworkConfigIT {
         out("Now query chaincode on channel %s for the current value of b", channel.getName());
 
         QueryByChaincodeRequest queryByChaincodeRequest = client.newQueryProposalRequest();
-        queryByChaincodeRequest.setArgs(new String[] {"query", "b"});
-        queryByChaincodeRequest.setFcn("invoke");
+        queryByChaincodeRequest.setArgs("b");
+        queryByChaincodeRequest.setFcn("query");
         queryByChaincodeRequest.setChaincodeID(chaincodeID);
 
         Collection<ProposalResponse> queryProposals;
@@ -278,8 +345,8 @@ public class NetworkConfigIT {
         /// Send transaction proposal to all peers
         TransactionProposalRequest transactionProposalRequest = client.newTransactionProposalRequest();
         transactionProposalRequest.setChaincodeID(chaincodeID);
-        transactionProposalRequest.setFcn("invoke");
-        transactionProposalRequest.setArgs(new String[] {"move", from, to, moveAmount});
+        transactionProposalRequest.setFcn("move");
+        transactionProposalRequest.setArgs(from, to, moveAmount);
         transactionProposalRequest.setProposalWaitTime(testConfig.getProposalWaitTime());
         if (user != null) { // specific user use that
             transactionProposalRequest.setUserContext(user);
@@ -392,7 +459,7 @@ public class NetworkConfigIT {
             instantiateProposalRequest.setProposalWaitTime(testConfig.getProposalWaitTime());
             instantiateProposalRequest.setChaincodeID(chaincodeID);
             instantiateProposalRequest.setFcn("init");
-            instantiateProposalRequest.setArgs(new String[] {"a", "500", "b", "999"});
+            instantiateProposalRequest.setArgs("a", "500", "b", "999");
 
             Map<String, byte[]> tm = new HashMap<>();
             tm.put("HyperLedgerFabric", "InstantiateProposalRequest:JavaSDK".getBytes(UTF_8));

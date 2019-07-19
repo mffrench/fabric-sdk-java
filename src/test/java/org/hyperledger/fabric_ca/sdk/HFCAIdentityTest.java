@@ -16,20 +16,14 @@ package org.hyperledger.fabric_ca.sdk;
 
 import java.io.File;
 import java.net.MalformedURLException;
-import java.security.KeyPair;
-import java.util.Properties;
 
-import org.hyperledger.fabric.sdk.Enrollment;
 import org.hyperledger.fabric.sdk.exception.CryptoException;
 import org.hyperledger.fabric.sdk.security.CryptoPrimitives;
-import org.hyperledger.fabric.sdk.security.CryptoSuite;
 import org.hyperledger.fabric.sdkintegration.SampleStore;
 import org.hyperledger.fabric.sdkintegration.SampleUser;
 import org.hyperledger.fabric_ca.sdk.exception.EnrollmentException;
 import org.hyperledger.fabric_ca.sdk.exception.IdentityException;
 import org.hyperledger.fabric_ca.sdk.exception.InvalidArgumentException;
-import org.hyperledger.fabric_ca.sdk.exception.RegistrationException;
-import org.hyperledger.fabric_ca.sdk.exception.RevocationException;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.BeforeClass;
@@ -43,7 +37,6 @@ public class HFCAIdentityTest {
     public ExpectedException thrown = ExpectedException.none();
 
     private static final String TEST_ADMIN_NAME = "admin";
-    private static final String TEST_ADMIN_PW = "adminpw";
     private static final String TEST_ADMIN_ORG = "org1";
 
     private SampleStore sampleStore;

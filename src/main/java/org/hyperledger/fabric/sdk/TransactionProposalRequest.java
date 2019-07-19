@@ -28,6 +28,10 @@ public class TransactionProposalRequest extends TransactionRequest {
 
     }
 
+    public void setChaincodeLanguage(Type chaincodeLanguage) {
+        this.chaincodeLanguage = chaincodeLanguage;
+    }
+
     /**
      * Transient data added to the proposal that is not added to the ledger.
      *
@@ -42,4 +46,9 @@ public class TransactionProposalRequest extends TransactionRequest {
         }
         this.transientMap = transientMap;
     }
+
+    public void setChaincodeName(String chaincodeName) {
+        this.chaincodeName = chaincodeName;
+    }
+
 }

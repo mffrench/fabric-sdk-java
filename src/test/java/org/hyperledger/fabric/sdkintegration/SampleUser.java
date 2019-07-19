@@ -23,9 +23,16 @@ import java.io.Serializable;
 import java.util.Set;
 
 import io.netty.util.internal.StringUtil;
+
 import org.bouncycastle.util.encoders.Hex;
 import org.hyperledger.fabric.sdk.Enrollment;
 import org.hyperledger.fabric.sdk.User;
+import org.hyperledger.fabric.sdk.security.CryptoSuite;
+import org.hyperledger.fabric_ca.sdk.EnrollmentRequest;
+import org.hyperledger.fabric_ca.sdk.HFCAClient;
+import org.hyperledger.fabric_ca.sdk.exception.EnrollmentException;
+import org.hyperledger.fabric_ca.sdk.exception.InvalidArgumentException;
+
 
 public class SampleUser implements User, Serializable {
     private static final long serialVersionUID = 8077132186383604355L;
@@ -41,8 +48,11 @@ public class SampleUser implements User, Serializable {
     private transient SampleStore keyValStore;
     private String keyValStoreName;
 
-    public SampleUser(String name, String org, SampleStore fs) {
+    private transient CryptoSuite cryptoSuite;
+
+    public SampleUser(String name, String org, SampleStore fs, CryptoSuite cryptoSuite) {
         this.name = name;
+        this.cryptoSuite = cryptoSuite;
 
         this.keyValStore = fs;
         this.organization = org;
@@ -194,6 +204,10 @@ public class SampleUser implements User, Serializable {
 
     }
 
+    public void setIdemixEnrollment(Enrollment enrollment) {
+        this.enrollment = enrollment;
+    }
+
     public static String toKeyValStoreName(String name, String org) {
         return "user." + name + org;
     }
@@ -210,5 +224,4 @@ public class SampleUser implements User, Serializable {
         saveState();
 
     }
-
 }

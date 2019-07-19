@@ -20,7 +20,6 @@ import java.util.List;
 import com.google.protobuf.InvalidProtocolBufferException;
 import org.hyperledger.fabric.protos.common.Common.Block;
 import org.hyperledger.fabric.protos.peer.PeerEvents;
-import org.hyperledger.fabric.protos.peer.PeerEvents.Event;
 import org.hyperledger.fabric.sdk.exception.InvalidProtocolBufferRuntimeException;
 
 /**
@@ -29,75 +28,36 @@ import org.hyperledger.fabric.sdk.exception.InvalidProtocolBufferRuntimeExceptio
  * @see Block
  */
 public class BlockEvent extends BlockInfo {
-//    private static final Log logger = LogFactory.getLog(BlockEvent.class);
-
-    private final EventHub eventHub;
     private final Peer peer;
-    private final Event event;
-
-    /**
-     * creates a BlockEvent object by parsing the input Block and retrieving its constituent Transactions
-     *
-     * @param eventHub a Hyperledger Fabric Block message
-     * @throws InvalidProtocolBufferException
-     * @see Block
-     */
-    BlockEvent(EventHub eventHub, Event event) throws InvalidProtocolBufferException {
-        super(event.getBlock());
-        this.eventHub = eventHub;
-        this.peer = null;
-        this.event = event;
-    }
 
     BlockEvent(Peer peer, PeerEvents.DeliverResponse resp) {
         super(resp);
-        eventHub = null;
         this.peer = peer;
-        this.event = null;
-
-    }
-
-    /**
-     * Get the Event Hub that received the event.
-     *
-     * @return an Event Hub. Maybe null if new peer eventing services is being used.
-     * @deprecated Use new peer eventing services
-     */
-    public EventHub getEventHub() {
-        return eventHub;
     }
 
     /**
      * The Peer that received this event.
      *
-     * @return Peer that received this event. Maybe null if source is legacy event hub.
+     * @return Peer that received this event
      */
     public Peer getPeer() {
         return peer;
     }
 
-//    /**
-//     * Raw proto buff event.
-//     *
-//     * @return Return raw protobuf event.
-//     */
-//
-//    public Event getEvent() {
-//        return event;
-//    }
-
-    boolean isBlockEvent() {
-        if (peer != null) {
-            return true; //peer always returns Block type events;
-        }
-
-        return event != null && event.getEventCase() == PeerEvents.Event.EventCase.BLOCK;
-    }
 
     TransactionEvent getTransactionEvent(int index) throws InvalidProtocolBufferException {
+        TransactionEvent ret = null;
 
-        return isFiltered() ? new TransactionEvent(getEnvelopeInfo(index).filteredTx) :
-                new TransactionEvent((TransactionEnvelopeInfo) getEnvelopeInfo(index));
+        EnvelopeInfo envelopeInfo = getEnvelopeInfo(index);
+        if (envelopeInfo.getType() == EnvelopeType.TRANSACTION_ENVELOPE) {
+            if (isFiltered()) {
+                ret = new TransactionEvent(getEnvelopeInfo(index).filteredTx);
+            } else {
+                ret = new TransactionEvent((TransactionEnvelopeInfo) getEnvelopeInfo(index));
+            }
+        }
+
+        return ret;
     }
 
     public class TransactionEvent extends TransactionEnvelopeInfo {
@@ -110,21 +70,21 @@ public class BlockEvent extends BlockInfo {
         }
 
         /**
-         * The event hub that received this event.
+         * The BlockEvent for this TransactionEvent.
          *
-         * @return May return null if peer eventing service detected the event.
-         * @deprecated use new peer eventing services {@link #getPeer()}
+         * @return BlockEvent for this transaction.
          */
 
-        public EventHub getEventHub() {
+        public BlockEvent getBlockEvent() {
 
-            return BlockEvent.this.getEventHub();
+            return BlockEvent.this;
+
         }
 
         /**
          * The peer that received this event.
          *
-         * @return May return null if deprecated eventhubs are still being used, otherwise return the peer.
+         * @return return peer producing the event.
          */
 
         public Peer getPeer() {
@@ -135,7 +95,7 @@ public class BlockEvent extends BlockInfo {
 
     List<TransactionEvent> getTransactionEventsList() {
 
-        ArrayList<TransactionEvent> ret = new ArrayList<TransactionEvent>(getEnvelopeCount());
+        ArrayList<TransactionEvent> ret = new ArrayList<TransactionEvent>(getTransactionCount());
         for (TransactionEvent transactionEvent : getTransactionEvents()) {
             ret.add(transactionEvent);
         }
@@ -153,29 +113,37 @@ public class BlockEvent extends BlockInfo {
     class TransactionEventIterator implements Iterator<TransactionEvent> {
         final int max;
         int ci = 0;
+        int returned = 0;
 
         TransactionEventIterator() {
-            max = getEnvelopeCount();
-
+            max = getTransactionCount();
         }
 
         @Override
         public boolean hasNext() {
-            return ci < max;
+            return returned < max;
 
         }
 
         @Override
         public TransactionEvent next() {
 
+            TransactionEvent ret = null;
+            // Filter for only transactions but today it's not really needed.
+            //  Blocks with transactions only has transactions or a single pdate.
             try {
-                return getTransactionEvent(ci++);
+                do {
+
+                    ret = getTransactionEvent(ci++);
+
+                } while (ret == null);
+
             } catch (InvalidProtocolBufferException e) {
                 throw new InvalidProtocolBufferRuntimeException(e);
             }
-
+            ++returned;
+            return ret;
         }
-
     }
 
     class TransactionEventIterable implements Iterable<TransactionEvent> {

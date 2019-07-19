@@ -23,6 +23,8 @@ import com.google.protobuf.InvalidProtocolBufferException;
 import org.hyperledger.fabric.protos.common.Common;
 import org.hyperledger.fabric.protos.common.Common.Block;
 import org.hyperledger.fabric.protos.ledger.rwset.Rwset.TxReadWriteSet;
+import org.hyperledger.fabric.protos.msp.Identities;
+import org.hyperledger.fabric.protos.peer.Chaincode;
 import org.hyperledger.fabric.protos.peer.Chaincode.ChaincodeInput;
 import org.hyperledger.fabric.protos.peer.FabricTransaction;
 import org.hyperledger.fabric.protos.peer.PeerEvents;
@@ -32,6 +34,7 @@ import org.hyperledger.fabric.sdk.transaction.ProtoUtils;
 
 import static java.lang.String.format;
 import static org.hyperledger.fabric.protos.peer.FabricProposalResponse.Endorsement;
+import static org.hyperledger.fabric.sdk.BlockInfo.EnvelopeType.TRANSACTION_ENVELOPE;
 
 /**
  * BlockInfo contains the data from a {@link Block}
@@ -45,16 +48,6 @@ public class BlockInfo {
         filteredBlock = null;
         this.block = new BlockDeserializer(block);
     }
-
-//    BlockInfo(PeerEvents.Event event) {
-//        if (event.getEventCase() == PeerEvents.Event.EventCase.FILTERED_BLOCK) {
-//            block = null;
-//            filteredBlock = event.getFilteredBlock();
-//        } else {
-//            this.block = new BlockDeserializer(event.getBlock());
-//            filteredBlock = null;
-//        }
-//    }
 
     BlockInfo(PeerEvents.DeliverResponse resp) {
 
@@ -146,14 +139,69 @@ public class BlockInfo {
      */
 
     public int getEnvelopeCount() {
-        return isFiltered() ? filteredBlock.getFilteredTxCount() : block.getData().getDataCount();
+        return isFiltered() ? filteredBlock.getFilteredTransactionsCount() : block.getData().getDataCount();
     }
+
+    private int transactionCount = -1;
+
+    /**
+     * Number of endorser transaction found in the block.
+     *
+     * @return Number of endorser transaction found in the block.
+     */
+
+    public int getTransactionCount() {
+        if (isFiltered()) {
+
+            int ltransactionCount = transactionCount;
+            if (ltransactionCount < 0) {
+                ltransactionCount = 0;
+
+                for (int i = filteredBlock.getFilteredTransactionsCount() - 1; i >= 0; --i) {
+                    FilteredTransaction filteredTransactions = filteredBlock.getFilteredTransactions(i);
+                    Common.HeaderType type = filteredTransactions.getType();
+                    if (type == Common.HeaderType.ENDORSER_TRANSACTION) {
+                        ++ltransactionCount;
+                    }
+                }
+                transactionCount = ltransactionCount;
+            }
+
+            return transactionCount;
+        }
+        int ltransactionCount = transactionCount;
+        if (ltransactionCount < 0) {
+
+            ltransactionCount = 0;
+            for (int i = getEnvelopeCount() - 1; i >= 0; --i) {
+                try {
+                    EnvelopeInfo envelopeInfo = getEnvelopeInfo(i);
+                    if (envelopeInfo.getType() == TRANSACTION_ENVELOPE) {
+                        ++ltransactionCount;
+                    }
+                } catch (InvalidProtocolBufferException e) {
+                    throw new InvalidProtocolBufferRuntimeException(e);
+                }
+            }
+            transactionCount = ltransactionCount;
+        }
+        return transactionCount;
+    }
+
+    /**
+     * Wrappers Envelope
+     */
 
     public class EnvelopeInfo {
         private final EnvelopeDeserializer envelopeDeserializer;
         private final HeaderDeserializer headerDeserializer;
         protected final FilteredTransaction filteredTx;
 
+        /**
+         * This block is filtered
+         *
+         * @return true if it's filtered.
+         */
         boolean isFiltered() {
             return filteredTx != null;
 
@@ -167,18 +215,79 @@ public class BlockInfo {
             filteredTx = null;
         }
 
-        public EnvelopeInfo(FilteredTransaction filteredTx) {
+        EnvelopeInfo(FilteredTransaction filteredTx) {
             this.filteredTx = filteredTx;
             envelopeDeserializer = null;
             headerDeserializer = null;
 
         }
 
+        /**
+         * Get channel id
+         *
+         * @return The channel id also referred to as channel name.
+         */
         public String getChannelId() {
 
             return BlockInfo.this.isFiltered() ? filteredBlock.getChannelId() : headerDeserializer.getChannelHeader().getChannelId();
         }
 
+        public class IdentitiesInfo {
+            final String mspid;
+            final String id;
+
+            /**
+             * The identification of the identity usually the certificate.
+             *
+             * @return The certificate of the user in PEM format.
+             */
+            public String getId() {
+                return id;
+            }
+
+            /**
+             * The MSPId of the user.
+             *
+             * @return The MSPid of the user.
+             */
+            public String getMspid() {
+                return mspid;
+            }
+
+            IdentitiesInfo(Identities.SerializedIdentity identity) {
+                mspid = identity.getMspid();
+                id = identity.getIdBytes().toStringUtf8();
+
+            }
+
+        }
+
+        /**
+         * This is the creator or submitter of the transaction.
+         * Returns null for a filtered block.
+         *
+         * @return {@link IdentitiesInfo}
+         */
+        public IdentitiesInfo getCreator() {
+            return isFiltered() ? null : new IdentitiesInfo(headerDeserializer.getCreator());
+
+        }
+
+        /**
+         * The nonce of the transaction.
+         *
+         * @return return null for filtered block.
+         */
+        public byte[] getNonce() {
+            return isFiltered() ? null : headerDeserializer.getNonce();
+
+        }
+
+        /**
+         * The transaction ID
+         *
+         * @return the transaction id.
+         */
         public String getTransactionID() {
 
             return BlockInfo.this.isFiltered() ? filteredTx.getTxid() : headerDeserializer.getChannelHeader().getTxId();
@@ -254,8 +363,8 @@ public class BlockInfo {
     /**
      * Return a specific envelope in the block by it's index.
      *
-     * @param envelopeIndex
-     * @return EnvelopeInfo that contains information on the envelope.
+     * @param envelopeIndex the index into list.
+     * @return envelopeIndex the index
      * @throws InvalidProtocolBufferException
      */
 
@@ -267,12 +376,12 @@ public class BlockInfo {
 
             if (isFiltered()) {
 
-                switch (filteredBlock.getFilteredTx(envelopeIndex).getType().getNumber()) {
+                switch (filteredBlock.getFilteredTransactions(envelopeIndex).getType().getNumber()) {
                     case Common.HeaderType.ENDORSER_TRANSACTION_VALUE:
-                        ret = new TransactionEnvelopeInfo(this.filteredBlock.getFilteredTx(envelopeIndex));
+                        ret = new TransactionEnvelopeInfo(this.filteredBlock.getFilteredTransactions(envelopeIndex));
                         break;
                     default: //just assume base properties.
-                        ret = new EnvelopeInfo(this.filteredBlock.getFilteredTx(envelopeIndex));
+                        ret = new EnvelopeInfo(this.filteredBlock.getFilteredTransactions(envelopeIndex));
                         break;
                 }
 
@@ -315,6 +424,16 @@ public class BlockInfo {
         TransactionEnvelopeInfo(FilteredTransaction filteredTx) {
             super(filteredTx);
             this.transactionDeserializer = null;
+        }
+
+        /**
+         * Signature for the transaction.
+         *
+         * @return byte array that as the signature.
+         */
+        public byte[] getSignature() {
+
+            return transactionDeserializer.getSignature();
         }
 
         TransactionEnvelopeInfo(EndorserTransactionEnvDeserializer transactionDeserializer) {
@@ -464,8 +583,75 @@ public class BlockInfo {
             }
 
             /**
-             * Get read write set for this transaction. Will return null on for Eventhub events.
-             * For eventhub events find the block by block number to get read write set if needed.
+             * get name of chaincode with this transaction action
+             *
+             * @return name of chaincode.  Maybe null if no chaincode or if block is filtered.
+             */
+            public String getChaincodeIDName() {
+                if (isFiltered()) {
+                    return null;
+                }
+                String name = null;
+
+                Chaincode.ChaincodeID ccid = transactionAction.getPayload().getAction().getProposalResponsePayload().
+                        getExtension().getChaincodeID();
+
+                if (ccid != null) {
+                    name = ccid.getName();
+                }
+
+                return name;
+
+            }
+
+            /**
+             * get path of chaincode with this transaction action
+             *
+             * @return path of chaincode.  Maybe null if no chaincode or if block is filtered.
+             */
+            public String getChaincodeIDPath() {
+                if (isFiltered()) {
+                    return null;
+                }
+                String path = null;
+
+                Chaincode.ChaincodeID ccid = transactionAction.getPayload().getAction().getProposalResponsePayload().
+                        getExtension().getChaincodeID();
+
+                if (ccid != null) {
+                    path = ccid.getPath();
+                }
+
+                return path;
+
+            }
+
+            /**
+             * get version of chaincode with this transaction action
+             *
+             * @return version of chaincode.  Maybe null if no chaincode or if block is filtered.
+             */
+
+            public String getChaincodeIDVersion() {
+                if (isFiltered()) {
+                    return null;
+                }
+                String version = null;
+
+                Chaincode.ChaincodeID ccid = transactionAction.getPayload().getAction().getProposalResponsePayload().
+                        getExtension().getChaincodeID();
+
+                if (ccid != null) {
+                    version = ccid.getVersion();
+                }
+
+                return version;
+
+            }
+
+            /**
+             * Get read write set for this transaction. Will return null on for peer events.
+             * For peer events find the block by block number to get read write set if needed.
              *
              * @return Read write set.
              */
@@ -497,7 +683,7 @@ public class BlockInfo {
             public ChaincodeEvent getEvent() {
                 if (isFiltered()) {
                     final PeerEvents.FilteredChaincodeAction chaincodeActions = filteredAction;
-                    return new ChaincodeEvent(chaincodeActions.getCcEvent().toByteString());
+                    return new ChaincodeEvent(chaincodeActions.getChaincodeEvent().toByteString());
                 }
 
                 return transactionAction.getPayload().getAction().getProposalResponsePayload()
@@ -554,7 +740,7 @@ public class BlockInfo {
         final int max;
 
         EnvelopeInfoIterator() {
-            max = isFiltered() ? filteredBlock.getFilteredTxCount() : block.getData().getDataCount();
+            max = isFiltered() ? filteredBlock.getFilteredTransactionsCount() : block.getData().getDataCount();
 
         }
 
@@ -600,8 +786,30 @@ public class BlockInfo {
             return endorsement.getSignature().toByteArray();
         }
 
+        /**
+         * @return
+         * @deprecated use getId and getMspid
+         */
         public byte[] getEndorser() {
             return endorsement.getEndorser().toByteArray();
+        }
+
+        public String getId() {
+
+            try {
+                return Identities.SerializedIdentity.parseFrom(endorsement.getEndorser()).getIdBytes().toStringUtf8();
+            } catch (InvalidProtocolBufferException e) {
+                throw new InvalidProtocolBufferRuntimeException(e);
+            }
+
+        }
+
+        public String getMspid() {
+            try {
+                return Identities.SerializedIdentity.parseFrom(endorsement.getEndorser()).getMspid();
+            } catch (InvalidProtocolBufferException e) {
+                throw new InvalidProtocolBufferRuntimeException(e);
+            }
         }
 
     }
